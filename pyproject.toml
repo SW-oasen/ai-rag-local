@@ -1,0 +1,29 @@
+[project]
+name = "local-rag-assistant"
+version = "0.1.0"
+description = "Local-first RAG assistant using local documents, embeddings, and LLMs."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "chromadb>=0.5.0",
+    "ollama>=0.3.0",
+    "pypdf>=4.0.0",
+]
+
+[project.scripts]
+rag-assistant = "rag_assistant.cli:main"
+rag-assistant-ui = "rag_assistant.web_app:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+ocr = [
+    "pillow>=10.0.0",
+    "pypdfium2>=4.30.0",
+    "pytesseract>=0.3.10",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
