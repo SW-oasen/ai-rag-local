@@ -1,450 +1,238 @@
-# Local RAG Assistant with Local LLM
+# Lokaler RAG-Assistent
 
-A practical Retrieval-Augmented Generation (RAG) project that runs locally on an AI PC.  
-The goal is to build a document-based assistant that can ingest local files, create embeddings, store searchable chunks in a vector database, retrieve relevant context, and answer questions using a local open-source LLM.
+Ein lokaler Retrieval-Augmented-Generation-Assistent für eigene Dokumente. Das Projekt lädt lokale Dateien, extrahiert Text, zerlegt ihn in sinnvolle Chunks, erzeugt Embeddings über Ollama, speichert diese in ChromaDB und beantwortet Fragen mit einem lokalen LLM inklusive Quellenangaben.
 
-## Current Status
+Die README beschreibt vor allem die lokale Weboberfläche. Technische Details, Architekturentscheidungen, Hardware-Annahmen und die vollständige CLI-Referenz stehen in `project_context.md`.
 
-Implemented:
+## Funktionen
 
-- Source-aware loading for Markdown, text, and simple PDF files
-- Overlapping text chunking with metadata preservation
-- Ollama embedding provider wrapper
-- ChromaDB-backed local vector store
-- Retriever service for top-k semantic search
-- Source-aware RAG prompt builder
-- Ollama local LLM client wrapper
-- RAG pipeline returning answer, sources, retrieved chunks, model, and prompt
-- CLI commands for ingestion, retrieval, and local question answering
-- Dedicated map-reduce document summarization pipeline
-- Sentence/word-aware chunk overlap starts to avoid mid-word fragments
-- Starter retrieval evaluation examples
-- Unit tests for loading, chunking, retrieval, prompt construction, pipeline behavior, summarization, and CLI formatting
+- Lokale Dokumentbibliothek für Markdown-, Text- und PDF-Dateien
+- Optionales OCR für gescannte PDFs über Tesseract
+- Semantische Suche über lokale Embeddings
+- Frage-Antwort-Funktion mit lokalem LLM
+- Quellenanzeige für Antworten und gefundene Chunks
+- Dokumentzusammenfassungen mit Cache und Export
+- Textextraktion mit Vorschau und `.txt`-Export
+- Lokale Konfiguration von Dokumentpfaden und Speicherorten
 
-Recommended local models:
+## Voraussetzungen
 
-- Generation: `qwen3-coder:30b` for quality, `qwen2.5-coder:7b` for faster iteration
-- Embeddings: `nomic-embed-text`
+- Python 3.10 oder neuer
+- Ollama
+- Ein lokal installiertes Embedding-Modell
+- Ein lokal installiertes Generationsmodell
+- Optional: Tesseract OCR für gescannte PDFs
 
-Install the embedding model with Ollama:
+Empfohlene Modelle:
+
+- Embeddings: `bge-m3` für Deutsch und Englisch, alternativ `nomic-embed-text`
+- Antworten: `qwen3:8b` für lokale Nutzung, `qwen3-coder:30b` bei stärkerer Hardware
+
+Modelle installieren:
 
 ```powershell
-ollama pull nomic-embed-text
+ollama pull bge-m3
+ollama pull qwen3:8b
 ```
 
-Install project dependencies into the local virtual environment:
+## Installation
+
+Virtuelle Umgebung erstellen und Abhängigkeiten installieren:
 
 ```powershell
+python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e .[dev]
 ```
 
-If Windows certificate verification blocks PyPI, retry with:
+Falls Windows die Zertifikatsprüfung für PyPI blockiert:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org -e .[dev]
 ```
 
-Run tests:
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest -p no:cacheprovider
-```
-
-Start the local browser UI:
-
-```powershell
-.\.venv\Scripts\rag-assistant-ui.exe
-```
-
-Then open:
-
-```text
-http://127.0.0.1:8765
-```
-
-## CLI Usage
-
-Ingest documents from a file or directory:
-
-```powershell
-.\.venv\Scripts\rag-assistant.exe ingest data/raw
-```
-
-For larger document folders, use a smaller embedding batch size:
-
-```powershell
-.\.venv\Scripts\rag-assistant.exe ingest data/raw --embedding-batch-size 8
-```
-
-For scanned PDFs, install OCR extras and the Tesseract application, then enable OCR:
+OCR-Abhängigkeiten installieren:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e .[ocr]
 winget install UB-Mannheim.TesseractOCR
 ```
 
-Open a new terminal and verify:
+Nach der Tesseract-Installation ein neues Terminal öffnen und prüfen:
 
 ```powershell
 tesseract --version
 ```
 
-OCR ingestion example:
+## Web UI Starten
+
+Lokale Browseroberfläche starten:
 
 ```powershell
-.\.venv\Scripts\rag-assistant.exe ingest data/raw --ocr --ocr-language eng+deu --ocr-scale 3 --ocr-psm 6 --embedding-batch-size 4
+.\.venv\Scripts\rag-assistant-ui.exe
 ```
 
-OCR options:
+Danach im Browser öffnen:
 
-- `--ocr-language`: Tesseract language, for example `eng`, `deu`, or `eng+deu`
-- `--ocr-scale`: PDF render scale before OCR; try `3` or `4` for small/blurred text
-- `--ocr-psm`: Tesseract page segmentation mode; try `6` for text blocks, `4` for columns, `11` for sparse text
-- `--no-ocr-preprocess`: disable grayscale/contrast/threshold/sharpen preprocessing
-- `--no-ocr-clean`: disable text cleanup for line wraps and hyphenated words
-
-If ChromaDB reports a SQLite disk I/O error on the project drive, use a vector-store path on another local drive:
-
-```powershell
-$env:RAG_VECTOR_STORE_DIR = "$env:TEMP\local_rag_vector_store"
-.\.venv\Scripts\rag-assistant.exe ingest data/raw --vector-store $env:RAG_VECTOR_STORE_DIR --embedding-batch-size 8
+```text
+http://127.0.0.1:8765
 ```
 
-By default, the CLI stores ChromaDB data under:
+Die Web UI läuft standardmäßig nur lokal unter `127.0.0.1` und nutzt die in `config.py` definierten Modelle und Speicherpfade, sofern beim Start keine anderen Optionen gesetzt werden.
+
+## Menüpunkt: Overview
+
+`Overview` ist die Startseite der Web UI. Sie zeigt den aktuellen Zustand der lokalen Dokumentbibliothek.
+
+Sichtbar sind:
+
+- Anzahl der indexierten Dokumente
+- Anzahl der gespeicherten Chunks
+- erkannte Seitenanzahl, falls verfügbar
+- Anzahl konfigurierter Dokumentpfade
+- unterstützte Dateitypen
+- aktueller Vector-Store-Pfad
+- aktueller Library-Store-Pfad
+- Tabelle der indexierten Quellen mit Dateityp, Chunk-Anzahl, Seiten und Pfad
+
+Typische Nutzung:
+
+1. Nach dem Start prüfen, ob bereits Quellen indexiert sind.
+2. Über die Quick Links zu Fragen, Zusammenfassungen, Textextraktion oder Konfiguration wechseln.
+3. Nach einer Ingestion kontrollieren, ob neue Dokumente im Quellenbereich auftauchen.
+
+## Menüpunkt: Ask
+
+`Ask` ist der Bereich für semantische Suche und Frage-Antwort-Nutzung.
+
+Funktionen:
+
+- Frage an alle indexierten Quellen stellen
+- Frage auf eine einzelne Quelle begrenzen
+- Anzahl der abgerufenen Chunks über `Top K` steuern
+- Nur Retrieval ausführen, ohne eine LLM-Antwort zu erzeugen
+- Antwort mit lokalem LLM erzeugen
+- Quellen der Antwort anzeigen
+- Gefundene Chunks mit Score und Textvorschau prüfen
+
+Typischer Workflow:
+
+1. Frage eingeben.
+2. Optional eine Quelle auswählen.
+3. `Top K` passend wählen, zum Beispiel `4` oder `5`.
+4. Erst `Retrieve` nutzen, um die gefundenen Chunks zu prüfen.
+5. Danach `Ask` nutzen, um aus den Chunks eine Antwort erzeugen zu lassen.
+
+Hinweis: Wenn die gefundenen Chunks nicht passen, sollte zuerst Retrieval geprüft werden, bevor Prompts oder Modelle angepasst werden.
+
+## Menüpunkt: Summarize
+
+`Summarize` erstellt und verwaltet Zusammenfassungen für indexierte Quellen.
+
+Funktionen:
+
+- Eine indexierte Quelle auswählen
+- Bereits gecachte Zusammenfassung anzeigen
+- Zusammenfassung neu erzeugen oder aktualisieren
+- Zusammenfassung als Markdown exportieren
+- Zusammenfassung als Textdatei exportieren
+- Anzahl der Teilsummaries nachvollziehen
+
+Typischer Workflow:
+
+1. Dokument auswählen.
+2. `View Cached Summary` prüfen, falls bereits eine Zusammenfassung existiert.
+3. `Generate / Update Summary` nutzen, um eine neue Zusammenfassung zu erstellen.
+4. Ergebnis über `Export .md` oder `Export .txt` speichern.
+
+Die Zusammenfassung nutzt einen eigenen Ablauf über alle Chunks der Quelle. Sie ist nicht nur eine normale Top-k-Frage.
+
+## Menüpunkt: Extract Text
+
+`Extract Text` dient zur Textprüfung vor der Indexierung oder zur separaten Textextraktion.
+
+Funktionen:
+
+- Datei- oder Ordnerpfad eingeben
+- Text aus unterstützten Dateitypen extrahieren
+- Optional OCR aktivieren
+- OCR-Sprache setzen, zum Beispiel `eng`, `deu` oder `eng+deu`
+- OCR-Skalierung und Page-Segmentation-Modus konfigurieren
+- Vorverarbeitung und Textbereinigung aktivieren oder deaktivieren
+- Extrahierten Text in der Web UI prüfen
+- Extrahierten Text als `.txt` exportieren
+
+Typischer Workflow:
+
+1. Pfad zu einer Datei oder einem Ordner eingeben.
+2. Bei normalen PDFs OCR deaktiviert lassen.
+3. Bei gescannten PDFs OCR aktivieren und Sprache setzen.
+4. `Extract Text` ausführen und die Textqualität prüfen.
+5. Bei Bedarf mit OCR-Skalierung oder `PSM` experimentieren.
+6. Text optional über `Export .txt` speichern.
+
+## Menüpunkt: Configuration
+
+`Configuration` verwaltet lokale Dokumentpfade, Indexing-Aktionen und gecachte Zusammenfassungen.
+
+Funktionen:
+
+- Dokumentpfad hinzufügen
+- Konfigurierte Pfade anzeigen
+- Einzelnen Pfad indexieren
+- Pfad wieder entfernen
+- Zusammenfassung für eine Quelle erzeugen oder aktualisieren
+- Gecachte Zusammenfassung entfernen
+- Aktuelle Speicherorte für Vector Store und Library Store anzeigen
+
+Typischer Workflow:
+
+1. Einen lokalen Dokumentpfad hinzufügen, zum Beispiel `data/raw` oder einen absoluten Pfad zu einem PDF.
+2. Den Pfad über `Ingest` indexieren.
+3. Zur `Overview` wechseln und prüfen, ob die Quellen sichtbar sind.
+4. Optional in `Configuration` eine Zusammenfassung für eine Quelle cachen.
+5. Danach in `Ask` Fragen stellen oder in `Summarize` Zusammenfassungen ansehen.
+
+## Lokale Speicherung
+
+Der ChromaDB-Index wird standardmäßig unter einem temporären lokalen Pfad gespeichert:
 
 ```powershell
 $env:TEMP\local_rag_assistant\vector_store
 ```
 
-Retrieve relevant chunks without calling the LLM:
+Der UI-Store für konfigurierte Pfade und gecachte Zusammenfassungen liegt standardmäßig unter:
+
+```text
+data/processed/web_library.json
+```
+
+Wenn ChromaDB auf einem Projektlaufwerk einen SQLite-Disk-I/O-Fehler meldet, ist ein Vector-Store-Pfad auf einem anderen lokalen Laufwerk oft die einfachste Lösung. Details und CLI-Optionen stehen in `project_context.md`.
+
+## Tests
 
 ```powershell
-.\.venv\Scripts\rag-assistant.exe retrieve "What is this project about?"
+.\.venv\Scripts\python.exe -m pytest -p no:cacheprovider
 ```
 
-Limit retrieval to one indexed source:
+Die Tests prüfen unter anderem Dokumentladen, Chunking, Retrieval, Prompt-Erstellung, Pipeline-Verhalten, Zusammenfassung und CLI-Ausgabeformatierung.
 
-```powershell
-.\.venv\Scripts\rag-assistant.exe retrieve "What evidence is in the office?" --source "Lions and Tigers and Snares.pdf"
-```
+## Grenzen
 
-List documents currently stored in the vector index:
+- Die Qualität hängt stark vom lokalen Modell ab.
+- PDF-Extraktion kann bei komplexem Layout, Tabellen und Scans unvollständig sein.
+- OCR ist langsamer und benötigt eine lokale Tesseract-Installation.
+- Semantisches Retrieval ist nicht perfekt; relevante Chunks sollten in `Ask` zuerst mit `Retrieve` geprüft werden.
+- Antworten sollen aus dem bereitgestellten Kontext entstehen, können aber bei schwachem Modell oder unpassendem Kontext trotzdem Fehler enthalten.
 
-```powershell
-.\.venv\Scripts\rag-assistant.exe sources
-```
+## Weitere Informationen
 
-Inspect stored chunks for one indexed source:
-
-```powershell
-.\.venv\Scripts\rag-assistant.exe chunks "Lions and Tigers and Snares.pdf" --limit 5 --preview-chars 180
-```
-
-Ask a question with retrieved context and the local LLM:
-
-```powershell
-.\.venv\Scripts\rag-assistant.exe ask "What is this project about?"
-```
-
-Ask against one indexed source:
-
-```powershell
-.\.venv\Scripts\rag-assistant.exe ask "What evidence is in the office?" --source "Lions and Tigers and Snares.pdf"
-```
-
-Run retrieval evaluation examples against the current index:
-
-```powershell
-.\.venv\Scripts\rag-assistant.exe eval examples/retrieval_eval_examples.md --top-k 5
-```
-
-The `eval` command takes a UTF-8 markdown file with questions and expected evidence, not the PDF or source document itself.
-
-The starter evaluation file expects `README.md` to be indexed. If your vector store currently contains a different document set, create matching examples or index the project docs first:
-
-```powershell
-.\.venv\Scripts\rag-assistant.exe ingest README.md
-```
-
-For the sample short story document:
-
-```powershell
-.\.venv\Scripts\rag-assistant.exe eval examples/lions_tigers_retrieval_eval_examples.md --top-k 5
-```
-
-Limit retrieval evaluation to one indexed source:
-
-```powershell
-.\.venv\Scripts\rag-assistant.exe eval examples/lions_tigers_retrieval_eval_examples.md --source "Lions and Tigers and Snares.pdf" --top-k 5
-```
-
-Write a detailed JSON evaluation report:
-
-```powershell
-.\.venv\Scripts\rag-assistant.exe eval examples/lions_tigers_retrieval_eval_examples.md --source "Lions and Tigers and Snares.pdf" --top-k 5 --json-report data/processed/lions_tigers_eval_report.json
-```
-
-Summarize a whole document without using top-k retrieval:
-
-```powershell
-.\.venv\Scripts\rag-assistant.exe summarize README.md --llm-model qwen2.5-coder:7b
-```
-
-Summarize chunks for a document that has already been indexed:
-
-cpowershell
-.\.venv\Scripts\rag-assistant.exe summarize README.md --from-index --vector-store $env:RAG_VECTOR_STORE_DIR --llm-model qwen2.5-coder:7b
-```
+- Technische Architektur: `project_context.md`
+- Vollständige CLI-Referenz: `project_context.md`
+- Beispiel-Evaluationen: `examples/`
+- Lokale Web-App-Implementierung: `src/rag_assistant/web_app.py`
 
 
 ---
-start web app
-```
-.\.venv\Scripts\rag-assistant-ui.exe
-```
-call web site
-http://127.0.0.1:8765
 
-ingest files from folder
-```
-.\.venv\Scripts\rag-assistant.exe ingest data/raw --embedding-batch-size 4
-```
-
-ingest single file
-```
-.\.venv\Scripts\rag-assistant.exe ingest path\to\file.pdf --embedding-batch-size 4
-```
-
-check what is indexed
-```
-.\.venv\Scripts\rag-assistant.exe sources
-```
-
-check which model is in use on ollama
-```bash
-ollama ps
-```
-
-
-Command roles:
-
-- `sources`: index inspection; shows indexed documents, chunk counts, and page counts
-- `chunks`: source inspection; shows stored chunk/page boundaries and text previews
-- `retrieve`: semantic search only; shows chunks and scores
-- `ask`: top-k retrieval plus answer generation
-- `summarize`: full-document summarization over all chunks for a selected source
-- `eval`: retrieval quality check against expected source/evidence examples
-- `rag-assistant-ui`: local browser UI for source inspection, retrieval, Q&A, and selected-source summarization
-
-Retrieval quality notes:
-
-- Chunking prefers paragraph, sentence, and word boundaries.
-- Retrieval should be inspected with `retrieve` before tuning prompts.
-- Starter evaluation examples live in `examples/retrieval_eval_examples.md`.
-
-Useful options:
-
-```powershell
-.\.venv\Scripts\rag-assistant.exe ingest data/raw --chunk-size 900 --chunk-overlap 150
-.\.venv\Scripts\rag-assistant.exe retrieve "retrieval quality" --top-k 5
-.\.venv\Scripts\rag-assistant.exe retrieve "retrieval quality" --source README.md --top-k 5
-.\.venv\Scripts\rag-assistant.exe ask "Summarize the documents" --llm-model qwen3-coder:30b --show-prompt
-.\.venv\Scripts\rag-assistant.exe summarize README.md --question "implementation plan" --max-chunks-per-group 4
-```
-
-
-
-## 1. Project Goal
-
-This project demonstrates a realistic local AI workflow:
-
-- Ingest local documents
-- Split documents into meaningful chunks
-- Create embeddings locally
-- Store embeddings in a vector database
-- Retrieve relevant chunks for a user question
-- Generate answers with a local LLM
-- Show sources for every answer
-- Provide a clean architecture that can later be extended into an AI agent
-
-The project should be portfolio-ready and understandable for recruiters, technical reviewers, and future development.
-
-## 2. Why This Project Matters
-
-Many AI demos rely on external APIs. This project focuses on a local-first setup:
-
-- Lower running cost
-- More privacy for personal documents
-- Better understanding of the full RAG pipeline
-- Hands-on experience with embeddings, chunking, vector search, prompt design, and evaluation
-- Foundation for future AI agent projects
-
-## 3. Target Use Case
-
-The assistant should answer questions over local documents such as:
-
-- PDF files
-- Markdown files
-- Text files
-- Project documentation
-- Notes
-- README files
-- Technical reports
-
-Example questions:
-
-- "What is the main idea of this document?"
-- "Which methods are mentioned?"
-- "Summarize the implementation plan."
-- "Which limitations are described?"
-- "Where in the source files is this topic discussed?"
-
-## 4. Planned Tech Stack
-
-Initial recommended stack:
-
-- Python
-- Ollama or another local LLM runtime
-- Local embedding model
-- ChromaDB or Qdrant as vector database
-- LangChain or LlamaIndex only if useful, not mandatory
-- Streamlit or FastAPI for a simple interface
-- pytest for testing
-- uv or venv for environment management
-
-The implementation should stay modular so individual parts can be replaced later.
-
-## 5. Core Features
-
-### Phase 1: Minimal RAG Pipeline
-
-- Load local documents
-- Extract text
-- Split text into chunks
-- Generate embeddings
-- Store chunks and metadata in a vector database
-- Retrieve top-k relevant chunks
-- Generate answer with local LLM
-- Display answer with source references
-
-### Phase 2: Better Retrieval Quality
-
-- Add metadata filtering
-- Improve chunking strategy
-- Add reranking if needed
-- Show retrieved context before generation
-- Add simple retrieval evaluation examples
-
-### Phase 3: User Interface
-
-- Build a simple local UI
-- Upload or select documents
-- Ask questions
-- Display answer and sources
-- Show retrieved chunks for debugging
-
-### Phase 4: Evaluation and Portfolio Polish
-
-- Add test documents
-- Add example questions and expected answer notes
-- Measure retrieval quality
-- Document limitations
-- Add screenshots
-- Add architecture diagram
-- Prepare project for GitHub portfolio
-
-## 6. Suggested Project Structure
-
-```text
-local-rag-assistant/
-├── README.md
-├── project_context.md
-├── codex_system_prompt.md
-├── pyproject.toml
-├── .gitignore
-├── data/
-│   ├── raw/
-│   └── processed/
-├── vector_store/
-├── src/
-│   └── rag_assistant/
-│       ├── __init__.py
-│       ├── config.py
-│       ├── document_loader.py
-│       ├── text_splitter.py
-│       ├── embeddings.py
-│       ├── vector_store.py
-│       ├── retriever.py
-│       ├── llm_client.py
-│       ├── rag_pipeline.py
-│       └── app.py
-├── tests/
-│   ├── test_text_splitter.py
-│   ├── test_retriever.py
-│   └── test_rag_pipeline.py
-└── notebooks/
-```
-
-## 7. Development Workflow
-
-The project should be developed step by step:
-
-1. Create project structure
-2. Implement document loading
-3. Implement text splitting
-4. Implement embeddings
-5. Implement vector storage
-6. Implement retrieval
-7. Connect local LLM
-8. Add source-aware answer generation
-9. Add tests
-10. Add UI
-11. Improve retrieval quality
-12. Polish documentation
-
-Each step should be tested before moving to the next step.
-
-## 8. Quality Requirements
-
-- Keep the code readable and modular
-- Avoid unnecessary complexity
-- Prefer small functions with clear responsibility
-- Add type hints where useful
-- Add docstrings for important modules and functions
-- Write tests for core logic
-- Do not commit large raw data, vector databases, model files, or local caches
-- Always show source references in generated answers
-- Be transparent when the retrieved context is insufficient
-
-## 9. Git Ignore Recommendations
-
-The following should not be committed:
-
-```text
-.venv/
-__pycache__/
-*.pyc
-.env
-data/raw/
-data/processed/
-vector_store/
-models/
-*.sqlite
-*.db
-.DS_Store
-```
-
-## 10. Future Extensions
-
-Possible extensions:
-
-- Multi-document comparison
-- Table extraction
-- PDF layout-aware parsing
-- Local reranker
-- Conversation memory
-- Agent tools for file search and project navigation
-- Evaluation dashboard
-- Hybrid search with BM25 + vector search
-- Support for German and English documents
-- Integration into personal local AI organizer
+Autor: Yuchuan Liu
+Letzte Aktualisierung: 2026-06-25

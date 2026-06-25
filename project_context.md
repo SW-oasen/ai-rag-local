@@ -1,304 +1,462 @@
-# Project Context: Local RAG Assistant with Local LLM
+# Projektkontext: Lokaler RAG-Assistent
 
-## 1. Background
+Dieses Dokument beschreibt die technischen Entscheidungen, Hardware-Annahmen, Implementierungsdetails, Entwicklungsleitlinien und CLI-Referenz des Projekts. Die README ist dagegen auf Überblick, Installation und die Nutzung der Web UI ausgerichtet.
 
-The developer wants to build a realistic local RAG project using a local open-source LLM on an AI PC. The project should be implemented in VS Code with Codex as the main coding agent.
+## 1. Zielbild
 
-The developer has experience with Python, Java, machine learning projects, portfolio projects, GitHub, VS Code, and practical step-by-step learning. The implementation should therefore focus on clarity, real-world usefulness, and portfolio value.
+Das Projekt baut einen lokalen dokumentenbasierten Frage-Antwort-Assistenten mit Retrieval-Augmented Generation. Der Assistent soll lokale Dokumente einlesen, in Chunks zerlegen, lokal einbetten, semantisch durchsuchen und Antworten mit Quellenhinweisen über ein lokales LLM erzeugen.
 
-This project should become a foundation for future AI agent projects.
+Wichtige Ziele:
 
-## 2. Main Objective
+- Lokale Ausführung ohne verpflichtende externe LLM-APIs
+- Verständliche, modulare RAG-Architektur
+- Portfoliofähige Dokumentation und Codebasis
+- Gute Debuggbarkeit für Retrieval, Prompting und Quellenzuordnung
+- Erweiterbarkeit in Richtung lokaler AI-Agenten
 
-Build a local document question-answering assistant.
+## 2. Hardware- und Laufzeitannahmen
 
-The assistant should:
+Das Projekt ist für einen lokalen AI-PC beziehungsweise eine leistungsfähige Workstation gedacht. Es soll aber so implementiert bleiben, dass auch kleinere Modelle nutzbar sind.
 
-- Read local documents
-- Convert them into searchable chunks
-- Store embeddings locally
-- Retrieve relevant context
-- Answer questions using a local LLM
-- Show source references
-- Run locally without depending on paid external LLM APIs
+Annahmen:
 
-## 3. Important Design Principles
+- Betriebssystem: Windows, Entwicklung in PowerShell und VS Code
+- Python: Version 3.10 oder neuer
+- Lokaler LLM-Runtime: Ollama
+- Vektorindex: ChromaDB mit lokaler Persistenz
+- Standard-UI: lokale HTTP-Oberfläche ohne externes Webframework
+- CLI: installierbare Entry Points über `pyproject.toml`
 
-### Local-first
+Modellstrategie:
 
-The project should run on the user's AI PC. Avoid mandatory cloud dependencies.
+- `qwen3:8b` als praktikables Standardmodell für lokale Antworten
+- `qwen3-coder:30b` als qualitativ stärkeres Modell, wenn genügend VRAM/RAM vorhanden ist
+- `bge-m3` als bevorzugtes Embedding-Modell für deutsche und englische Dokumente
+- `nomic-embed-text` als schnelle Alternative
 
-### Step-by-step implementation
+Leistungsaspekte:
 
-Do not build everything at once. Plan first, then implement and test one part at a time.
+- Größere Generationsmodelle verbessern Antwortqualität, erhöhen aber Latenz und Speicherbedarf.
+- Embedding-Batches sollten bei knapper Hardware reduziert werden, zum Beispiel `--embedding-batch-size 4`.
+- OCR ist rechenintensiv und sollte nur für PDFs ohne extrahierbaren Text aktiviert werden.
+- Der Vector Store liegt standardmäßig im temporären lokalen Benutzerverzeichnis, nicht zwingend im Repository.
 
-### Portfolio-ready
+## 3. Aktueller Implementierungsstand
 
-The project should be understandable from the README, screenshots, code structure, and examples.
+Vorhanden:
 
-### Modular architecture
+- Dokumentladen für Markdown, Text und PDFs
+- Optionales OCR für PDF-Seiten ohne verwertbaren Text
+- Text-Splitting mit Chunk-Größe, Überlappung und Boundary-Verbesserungen
+- Metadaten je Chunk, darunter Quelle, Dateiname, Chunk-Index, Seitenzahl und Zeichenbereiche
+- Ollama-Embedding-Provider
+- ChromaDB-basierter lokaler Vector Store
+- Retriever für semantische Top-k-Suche
+- Prompt Builder mit Quellenkontext
+- Ollama-LLM-Client
+- RAG-Pipeline mit Antwort, Quellen, Chunks, Modell und Prompt
+- Dedizierter Map-Reduce-Summarizer für vollständige Dokumentzusammenfassung
+- Retrieval-Evaluation über Markdown-Beispieldateien
+- CLI mit `ingest`, `sources`, `chunks`, `retrieve`, `ask`, `summarize` und `eval`
+- Lokale Browser-UI mit `Overview`, `Ask`, `Summarize`, `Extract Text` und `Configuration`
+- Tests für Kernmodule und Ausgabeformatierung
 
-Each part should be replaceable:
+## 4. Technischer Stack
 
-- LLM runtime
-- embedding model
-- vector database
-- document parser
-- UI framework
+Kerntechnologien:
 
-### Debuggability
+- Python
+- Ollama Python Client
+- ChromaDB
+- pypdf
+- pytest
+- Standardbibliothek für CLI und lokale Weboberfläche
 
-The system should make retrieval visible. It should be possible to inspect:
+Optionale OCR-Technologien:
 
-- loaded documents
-- generated chunks
-- metadata
-- retrieved chunks
-- final prompt
-- final answer
+- Tesseract OCR
+- pytesseract
+- Pillow
+- pypdfium2
 
-## 4. Initial Scope
+Bewusste Entscheidungen:
 
-The first version should be simple and reliable.
+- Kein schweres RAG-Framework als Pflichtabhängigkeit
+- Keine Cloud-API als Standardpfad
+- Keine Datenbankserver-Abhängigkeit
+- UI bewusst einfach und lokal, damit die RAG-Pipeline im Mittelpunkt bleibt
 
-### In scope
+## 5. Architektur
 
-- Markdown, text, and simple PDF support
-- Local embedding generation
-- Local vector database
-- Basic semantic retrieval
-- Local LLM answer generation
-- Source display
-- Basic tests
-- Simple local UI or CLI
-
-### Out of scope for first version
-
-- Complex agent behavior
-- Long-term memory
-- OCR-heavy document parsing
-- Full table understanding
-- Complex PDF layout reconstruction
-- Multi-user deployment
-- Cloud hosting
-- Advanced access control
-
-These can be added later.
-
-## 5. Suggested Implementation Phases
-
-### Phase 0: Planning
-
-Codex should inspect the repository, propose a concrete implementation plan, and wait for approval before making large changes.
-
-Deliverables:
-
-- Project structure
-- Dependency proposal
-- First milestone plan
-
-### Phase 1: Core Data Pipeline
-
-Implement:
-
-- document loading
-- text extraction
-- chunking
-- metadata creation
-- basic tests
-
-Expected result:
-
-- Documents can be loaded and split into chunks with source metadata.
-
-### Phase 2: Embeddings and Vector Store
-
-Implement:
-
-- local embedding model wrapper
-- vector database initialization
-- add documents to vector store
-- similarity search
-- retrieval tests
-
-Expected result:
-
-- User questions return relevant chunks.
-
-### Phase 3: Local LLM Integration
-
-Implement:
-
-- local LLM client
-- prompt template
-- answer generation
-- source-aware response format
-
-Expected result:
-
-- The assistant answers based on retrieved context and cites sources.
-
-### Phase 4: Interface
-
-Implement one of:
-
-- CLI first
-- Streamlit UI
-- FastAPI backend with simple frontend later
-
-Recommendation: start with CLI or Streamlit for faster validation.
-
-### Phase 5: Evaluation and Improvement
-
-Add:
-
-- example documents
-- example questions
-- retrieval inspection
-- simple evaluation notes
-- limitations section
-- screenshots for portfolio
-
-## 6. Recommended Architecture
+### Ingestion
 
 ```text
-User Question
-     |
-     v
-Retriever
-     |
-     v
-Top-k Relevant Chunks
-     |
-     v
-Prompt Builder
-     |
-     v
-Local LLM
-     |
-     v
-Answer + Sources
-```
-
-Document ingestion:
-
-```text
-Documents
-     |
-     v
-Loader
-     |
-     v
+Datei oder Ordner
+    |
+    v
+Document Loader
+    |
+    v
+Document-Objekte mit Text und Metadaten
+    |
+    v
 Text Splitter
-     |
-     v
-Embedding Model
-     |
-     v
-Vector Store
+    |
+    v
+TextChunk-Objekte
+    |
+    v
+Ollama Embeddings
+    |
+    v
+ChromaDB Collection
 ```
 
-## 7. Coding Expectations for Codex
+### Question Answering
 
-Codex should:
+```text
+Nutzerfrage
+    |
+    v
+Embedding der Frage
+    |
+    v
+Semantisches Retrieval
+    |
+    v
+Top-k Chunks
+    |
+    v
+Prompt Builder
+    |
+    v
+Lokales LLM
+    |
+    v
+RagAnswer mit Quellen
+```
 
-- Explain the planned change before implementing
-- Prefer small commits or small logical changes
-- Modify only necessary files
-- Keep code simple and readable
-- Add tests for core logic
-- Run tests after implementation
-- Report what changed, what was tested, and what remains open
-- Avoid large rewrites unless explicitly requested
-- Preserve working code
-- Ask before changing architecture significantly
+### Zusammenfassung
 
-## 8. Retrieval Requirements
+Zusammenfassungen laufen bewusst nicht über normales Top-k-Retrieval. Für vollständige Dokumente wird ein eigener Ablauf genutzt:
 
-Every retrieved chunk should keep metadata:
+1. Alle relevanten Chunks einer Datei laden
+2. Chunks in Gruppen zusammenfassen
+3. Teilsummaries erzeugen
+4. Teilsummaries zu einer finalen Zusammenfassung verdichten
+5. Quellen und Anzahl der Teilsummaries ausgeben
 
-- source file path
-- file name
-- chunk index
-- page number if available
-- character range if available
-- document type
+## 6. Modulübersicht
 
-The final answer should include source references.
+- `config.py`: Standardpfade, Modellnamen, Chunk-Parameter und Retrieval-Defaults
+- `document_loader.py`: Text- und PDF-Laden, OCR-Optionen, Dokumentmetadaten
+- `text_splitter.py`: Chunking mit Überlappung und Boundary-Logik
+- `embeddings.py`: Ollama-Embedding-Provider und Fehlerbehandlung
+- `vector_store.py`: ChromaDB-Persistenz, Quellenlisten, Chunk-Zugriff
+- `retriever.py`: semantisches Retrieval mit optionalem Quellenfilter
+- `prompt_builder.py`: RAG-Prompt mit Kontext und Quellenregeln
+- `llm_client.py`: Ollama-Client für lokale Generierung
+- `rag_pipeline.py`: Verbindung aus Retriever, Prompt und LLM-Antwort
+- `summarizer.py`: dokumentweite Map-Reduce-Zusammenfassung
+- `evaluation.py`: Retrieval-Evaluation über Beispieltabellen
+- `library_store.py`: lokale UI-Konfiguration und gecachte Zusammenfassungen
+- `cli.py`: Kommandozeilenoberfläche
+- `web_app.py`: lokale HTTP-Browseroberfläche
+- `schema.py`: zentrale Datenobjekte
 
-If the retrieved context is weak or insufficient, the assistant should say so instead of guessing.
+## 7. Daten- und Speicherorte
 
-## 9. Prompting Requirements
+Repository-nahe Verzeichnisse:
 
-The RAG prompt should instruct the local LLM to:
+- `data/raw/`: lokale Eingabedokumente, nicht für Git gedacht
+- `data/processed/`: generierte Reports, UI-Cache und Ausgaben
+- `examples/`: kleine Evaluationsdateien
+- `documents/`: Projekt- oder Starterdokumente
+- `tests/`: automatisierte Tests
 
-- answer only from the provided context when possible
-- say when the context is insufficient
-- cite sources
-- avoid hallucinating details
-- answer in the user's language if possible
+Vector Store:
 
-## 10. Testing Strategy
+- Standard: `%TEMP%\local_rag_assistant\vector_store`
+- Überschreibbar über `RAG_VECTOR_STORE_DIR`
+- Überschreibbar pro Befehl über `--vector-store`
 
-Start with small tests:
+Grund für den temporären Standardpfad:
 
-- text splitting does not lose content
-- chunks include metadata
-- vector store returns expected chunks for simple queries
-- prompt builder includes context and question
-- RAG pipeline returns an answer object with sources
+- Weniger Risiko, große oder binäre ChromaDB-Dateien versehentlich zu committen
+- Umgehung möglicher SQLite-I/O-Probleme auf bestimmten Projektlaufwerken
+- Einfaches Löschen und Neuaufbauen des Index
 
-Tests do not need to evaluate model intelligence at first. They should verify pipeline behavior.
+## 8. Metadatenanforderungen
 
-## 11. Known Challenges
+Jeder Chunk soll ausreichend Metadaten behalten, damit Antworten überprüfbar bleiben:
 
-The project should explicitly acknowledge common RAG limitations:
+- vollständiger Quellpfad
+- Dateiname
+- Dokumenttyp
+- Chunk-Index
+- Seitenzahl, falls verfügbar
+- Start- und Endzeichen im extrahierten Text, falls verfügbar
+- OCR-Hinweis, falls OCR verwendet wurde
 
-- context length limits
-- imperfect chunking
-- weak retrieval for tables and figures
-- PDF extraction problems
-- hallucination risk
-- local model quality differences
-- slow inference on large models
-- need for evaluation
+Diese Metadaten sind wichtig für:
 
-## 12. Success Criteria
+- Quellenanzeige in Antworten
+- Debugging von Retrieval-Ergebnissen
+- Quellenfilter in CLI und UI
+- Dokumentweite Zusammenfassungen aus indexierten Chunks
+- Retrieval-Evaluation
 
-The first successful version is reached when:
+## 9. Prompting-Ansatz
 
-- local documents can be indexed
-- a user can ask a question
-- relevant chunks are retrieved
-- the local LLM generates an answer
-- source references are shown
-- the project can be run from clear README instructions
-- core logic has basic tests
+Der RAG-Prompt soll das Modell zu folgenden Verhaltensweisen führen:
 
+- Möglichst nur auf Basis des gelieferten Kontexts antworten
+- Fehlenden oder schwachen Kontext transparent benennen
+- Quellen referenzieren
+- Nicht belegte Details vermeiden
+- In der Sprache der Nutzerfrage antworten, wenn möglich
 
-## 13. RAG Quality Requirements
+Für Debugging kann der vollständige Prompt mit `--show-prompt` angezeigt werden.
 
-The system must not work like a simple keyword search.
+## 10. Retrieval-Ansatz
 
-It should support:
-- semantic retrieval, not only exact word matching
-- paragraph-level and section-level understanding
-- summarization of full documents
-- summarization of selected sections
-- question answering over multiple chunks
-- source references for every answer
-- transparent retrieval debugging
+Das System soll klar zwischen diesen Modi unterscheiden:
 
-The system should distinguish between:
-- keyword search
-- semantic retrieval
-- answer generation
-- document summarization
-- multi-step synthesis
+- Keyword-Suche: exakte oder oberflächennahe Texttreffer
+- Semantisches Retrieval: Embedding-basierte Ähnlichkeit
+- Antwortgenerierung: Synthese über gefundene Chunks
+- Dokumentzusammenfassung: Verarbeitung aller relevanten Chunks einer Quelle
+- Evaluation: Vergleich von Retrieval-Ergebnissen mit erwarteten Quellen oder Evidenzen
 
-For summarization tasks, the system should not rely only on top-k retrieval.
-It should use a dedicated summarization flow, for example:
-1. load all chunks of the selected document
-2. summarize chunks or sections
-3. merge partial summaries
-4. create a final concise summary with limitations
+Qualitätsanforderungen:
+
+- Retrieval soll nicht nur exakte Stichwörter finden.
+- Chunks sollen semantisch sinnvolle Textbereiche enthalten.
+- Quellenfilter müssen reproduzierbare Tests und gezielte Analysen ermöglichen.
+- Retrieval-Ergebnisse sollen vor Prompt-Tuning direkt inspizierbar sein.
+
+## 11. CLI-Referenz
+
+Die CLI ist für technische Prüfung, Skripting, Evaluation und Debugging gedacht. Die README beschreibt primär die Web UI.
+
+### Web UI starten
+
+```powershell
+.\.venv\Scripts\rag-assistant-ui.exe
+```
+
+Danach öffnen:
+
+```text
+http://127.0.0.1:8765
+```
+
+### Dokumente indexieren
+
+Ordner indexieren:
+
+```powershell
+.\.venv\Scripts\rag-assistant.exe ingest data/raw
+```
+
+Ordner mit kleinerem Embedding-Batch indexieren:
+
+```powershell
+.\.venv\Scripts\rag-assistant.exe ingest data/raw --embedding-batch-size 4
+```
+
+Einzelne Datei indexieren:
+
+```powershell
+.\.venv\Scripts\rag-assistant.exe ingest path\to\file.pdf --embedding-batch-size 4
+```
+
+Chunk-Größe anpassen:
+
+```powershell
+.\.venv\Scripts\rag-assistant.exe ingest data/raw --chunk-size 900 --chunk-overlap 150
+```
+
+OCR für gescannte PDFs aktivieren:
+
+```powershell
+.\.venv\Scripts\rag-assistant.exe ingest data/raw --ocr --ocr-language eng+deu --ocr-scale 3 --ocr-psm 6 --embedding-batch-size 4
+```
+
+Wichtige OCR-Optionen:
+
+- `--ocr-language`: Tesseract-Sprache, zum Beispiel `eng`, `deu` oder `eng+deu`
+- `--ocr-scale`: Render-Skalierung vor OCR; `3` oder `4` hilft oft bei kleinem Text
+- `--ocr-psm`: Page-Segmentation-Modus; `6` für Textblöcke, `4` für Spalten, `11` für verstreuten Text
+- `--no-ocr-preprocess`: Bildvorverarbeitung deaktivieren
+- `--no-ocr-clean`: Textbereinigung deaktivieren
+
+### Index inspizieren
+
+Indexierte Quellen anzeigen:
+
+```powershell
+.\.venv\Scripts\rag-assistant.exe sources
+```
+
+Chunks einer Quelle anzeigen:
+
+```powershell
+.\.venv\Scripts\rag-assistant.exe chunks "Lions and Tigers and Snares.pdf" --limit 5 --preview-chars 180
+```
+
+### Retrieval und Fragen
+
+Semantische Suche ohne LLM-Antwort:
+
+```powershell
+.\.venv\Scripts\rag-assistant.exe retrieve "Welche Methoden werden beschrieben?" --top-k 5
+```
+
+Suche auf eine Quelle begrenzen:
+
+```powershell
+.\.venv\Scripts\rag-assistant.exe retrieve "Welche Hinweise gibt es?" --source "Lions and Tigers and Snares.pdf"
+```
+
+Frage mit lokaler Antwortgenerierung:
+
+```powershell
+.\.venv\Scripts\rag-assistant.exe ask "Fasse die Dokumente zusammen." --llm-model qwen3:8b
+```
+
+Prompt zur Fehlersuche anzeigen:
+
+```powershell
+.\.venv\Scripts\rag-assistant.exe ask "Was sind die wichtigsten Punkte?" --show-prompt
+```
+
+Frage auf eine Quelle begrenzen:
+
+```powershell
+.\.venv\Scripts\rag-assistant.exe ask "Was steht in diesem Dokument?" --source "Lions and Tigers and Snares.pdf"
+```
+
+### Zusammenfassung
+
+Eine Datei direkt zusammenfassen:
+
+```powershell
+.\.venv\Scripts\rag-assistant.exe summarize README.md --llm-model qwen3:8b
+```
+
+Bereits indexierte Chunks einer Quelle zusammenfassen:
+
+```powershell
+.\.venv\Scripts\rag-assistant.exe summarize README.md --from-index --llm-model qwen3:8b
+```
+
+Zusammenfassung mit Fokusfrage:
+
+```powershell
+.\.venv\Scripts\rag-assistant.exe summarize README.md --question "Implementierungsplan" --max-chunks-per-group 4
+```
+
+### Retrieval-Evaluation
+
+Evaluation gegen Beispiel-Fragen ausführen:
+
+```powershell
+.\.venv\Scripts\rag-assistant.exe eval examples/retrieval_eval_examples.md --top-k 5
+```
+
+Evaluation auf eine Quelle begrenzen:
+
+```powershell
+.\.venv\Scripts\rag-assistant.exe eval examples/lions_tigers_retrieval_eval_examples.md --source "Lions and Tigers and Snares.pdf" --top-k 5
+```
+
+JSON-Report schreiben:
+
+```powershell
+.\.venv\Scripts\rag-assistant.exe eval examples/lions_tigers_retrieval_eval_examples.md --source "Lions and Tigers and Snares.pdf" --top-k 5 --json-report data/processed/lions_tigers_eval_report.json
+```
+
+### Vector Store überschreiben
+
+Wenn ChromaDB auf einem Projektlaufwerk einen SQLite-Disk-I/O-Fehler meldet, kann ein Vector-Store-Pfad auf einem anderen lokalen Laufwerk genutzt werden:
+
+```powershell
+$env:RAG_VECTOR_STORE_DIR = "$env:TEMP\local_rag_vector_store"
+.\.venv\Scripts\rag-assistant.exe ingest data/raw --vector-store $env:RAG_VECTOR_STORE_DIR
+```
+
+### Ollama-Modellstatus prüfen
+
+```powershell
+ollama ps
+```
+
+## 12. Entwicklungsprinzipien
+
+- Kleine, nachvollziehbare Änderungen bevorzugen
+- Module klar getrennt halten
+- Keine unnötige Framework-Abstraktion hinzufügen
+- Bestehende Schnittstellen schonen
+- Tests für Kernlogik ergänzen, wenn Verhalten geändert wird
+- Große lokale Dateien, Indexdaten, Modelle und Caches nicht committen
+- README nutzerorientiert halten
+- Technische Details und Entscheidungen in diesem Dokument pflegen
+
+## 13. Teststrategie
+
+Tests sollen Pipeline-Verhalten prüfen, ohne die Intelligenz eines konkreten LLMs bewerten zu müssen.
+
+Wichtige Testbereiche:
+
+- Dokumentladen erzeugt Text und Metadaten
+- Chunking verliert keinen Inhalt und respektiert Grenzen
+- Chunks enthalten Quelleninformationen
+- Vector Store speichert und liefert Chunks
+- Retriever akzeptiert Quellenfilter
+- Prompt Builder enthält Frage und Kontext
+- RAG-Pipeline liefert Antwortobjekt und Quellen
+- Summarizer verarbeitet mehrere Chunk-Gruppen
+- CLI-Formatter erzeugen lesbare Ausgaben
+- Evaluation erkennt passende und fehlende Treffer
+
+Standardtestbefehl:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -p no:cacheprovider
+```
+
+## 14. Bekannte Risiken und Grenzen
+
+- PDF-Extraktion ist bei Layouts, Tabellen, Scans und mehrspaltigen Dokumenten fehleranfällig.
+- OCR kann langsam sein und fehlerhaften Text erzeugen.
+- Lokale Modelle halluzinieren bei schwachem Kontext weiterhin.
+- Kleine Modelle folgen Quellen- und Kontextregeln nicht immer zuverlässig.
+- Retrieval kann relevante Chunks verpassen, wenn Chunking, Embedding-Modell oder Frageformulierung nicht passen.
+- ChromaDB und SQLite können je nach Laufwerk oder Virenscanner I/O-Probleme zeigen.
+- Große Dokumentbestände benötigen Evaluation und Tuning statt reinem Bauchgefühl.
+
+## 15. Erfolgskriterien
+
+Eine stabile erste Version ist erreicht, wenn:
+
+- Dokumente lokal indexiert werden können
+- Quellen und Chunks inspizierbar sind
+- Fragen semantisch relevante Chunks abrufen
+- Antworten mit lokalen Modellen generiert werden
+- Quellen in Antworten angezeigt werden
+- Vollständige Dokumente zusammengefasst werden können
+- Tests für Kernlogik laufen
+- README und Projektkontext den aktuellen Stand erklären
+
+## 16. Mögliche nächste Schritte
+
+- README um Screenshots der lokalen UI ergänzen
+- Architekturdiagramm als Bild oder Mermaid-Diagramm hinzufügen
+- Retrieval-Evaluation mit deutschen Dokumenten erweitern
+- Hybrid Search mit BM25 und Vektor-Retrieval prüfen
+- Optionalen lokalen Reranker integrieren
+- Tabellenextraktion verbessern
+- UI-Texte vollständig eindeutschen
+- Exportformate für Antworten und Zusammenfassungen erweitern
+- Kleine Beispiel-Dokumentbibliothek für Portfolio-Demos vorbereiten

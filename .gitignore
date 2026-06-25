@@ -17,3 +17,4 @@ models/
 *.sqlite3-journal
 *.db
 .DS_Store
+tests/*

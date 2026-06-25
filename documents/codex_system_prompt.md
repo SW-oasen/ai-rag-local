@@ -43,6 +43,7 @@ Follow these rules:
 - Keep configuration in a dedicated config module or `.env` file.
 - Preserve existing working behavior.
 - Avoid deleting user work unless explicitly instructed.
+- Source and comments in English. Documentation like `README.md` and `project_context.md` in German. Make sure the umlauts are correct. Do not use substitute. 
 
 ## 4. Local-first AI Rules
 

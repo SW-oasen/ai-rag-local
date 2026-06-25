@@ -2,8 +2,10 @@ from pathlib import Path
 
 from rag_assistant.schema import IndexedSource, RagAnswer, RetrievalResult, SourceReference, SummaryResult, TextChunk
 from rag_assistant.schema import Document
+from rag_assistant.library_store import CachedSummary
 from rag_assistant.web_app import (
     build_parser,
+    format_cached_summary,
     render_extracted_documents,
     render_page,
     render_retrieval_results,
@@ -17,10 +19,12 @@ def test_build_parser_accepts_ui_options() -> None:
     assert args.port == 9000
     assert args.vector_store == Path("store")
     assert args.llm_model == "local"
+    assert args.library_store.name == "web_library.json"
 
 
-def test_render_page_includes_sources_and_form() -> None:
+def test_render_overview_includes_navigation_and_sources() -> None:
     html = render_page(
+        active_page="overview",
         sources=[
             IndexedSource(
                 file_name="example.pdf",
@@ -35,12 +39,25 @@ def test_render_page_includes_sources_and_form() -> None:
     )
 
     assert "Local RAG Assistant" in html
-    assert "What is this about?" in html
     assert "example.pdf" in html
+    assert 'href="/ask"' in html
+    assert 'href="/summarize"' in html
+    assert 'href="/extract-text"' in html
+
+
+def test_render_ask_page_includes_question_form() -> None:
+    html = render_page(active_page="ask", question="What is this about?")
+
+    assert "What is this about?" in html
     assert 'formaction="/retrieve"' in html
     assert 'formaction="/ask"' in html
-    assert 'formaction="/summarize"' in html
+
+
+def test_render_extract_page_includes_ocr_controls() -> None:
+    html = render_page(active_page="extract-text")
+
     assert 'action="/extract-text"' in html
+    assert 'formaction="/extract-text-export"' in html
     assert 'name="ocr_language"' in html
     assert 'name="ocr_scale"' in html
     assert 'name="ocr_psm"' in html
@@ -73,6 +90,7 @@ def test_render_retrieval_results_escapes_chunk_text() -> None:
 
 def test_render_page_includes_answer_sources() -> None:
     html = render_page(
+        active_page="ask",
         answer=RagAnswer(
             answer="Use local context.",
             sources=[
@@ -91,6 +109,24 @@ def test_render_page_includes_answer_sources() -> None:
 
     assert "Use local context." in html
     assert "example.md, chunk 2, page 4" in html
+
+
+def test_format_cached_summary_as_markdown() -> None:
+    text = format_cached_summary(
+        CachedSummary(
+            source_path="docs/example.md",
+            file_name="example.md",
+            summary="A useful summary.",
+            model="fake",
+            source_count=2,
+            partial_summary_count=1,
+        ),
+        export_format="md",
+    )
+
+    assert "# Summary: example.md" in text
+    assert "- Model: fake" in text
+    assert "A useful summary." in text
 
 
 def test_render_summary_includes_sources_and_partial_count() -> None:
