@@ -82,7 +82,10 @@ Nach der Tesseract-Installation ein neues Terminal öffnen und prüfen:
 
 ```powershell
 tesseract --version
+tesseract --list-langs
 ```
+
+Die OCR-Dropdownliste in der Web UI bietet Englisch (`eng`), Deutsch (`deu`), Englisch+Deutsch (`eng+deu`), Französisch (`fra`), vereinfachtes Chinesisch (`chi_sim`) und traditionelles Chinesisch (`chi_tra`). Die jeweilige Sprache funktioniert nur, wenn das passende Tesseract-Sprachpaket lokal installiert ist.
 
 ## Web UI Starten
 
@@ -176,19 +179,19 @@ Funktionen:
 - Datei- oder Ordnerpfad eingeben
 - Text aus unterstützten Dateitypen extrahieren
 - Optional OCR aktivieren
-- OCR-Sprache setzen, zum Beispiel `eng`, `deu` oder `eng+deu`
+- OCR-Sprache über eine Dropdownliste wählen, zum Beispiel `eng`, `deu`, `fra`, `chi_sim` oder `chi_tra`
 - OCR-Skalierung und Page-Segmentation-Modus konfigurieren
 - Vorverarbeitung und Textbereinigung aktivieren oder deaktivieren
 - Extrahierten Text in der Web UI prüfen
-- Extrahierten Text als `.txt` exportieren
+- Extrahierten Text als `.txt` exportieren; der Dateiname wird aus der Quelle abgeleitet
 
 Typischer Workflow:
 
 1. Pfad zu einer Datei oder einem Ordner eingeben.
-2. Bei normalen PDFs OCR deaktiviert lassen.
-3. Bei gescannten PDFs OCR aktivieren und Sprache setzen.
+2. OCR ist standardmäßig aktiviert, wird bei PDFs aber nur genutzt, wenn keine normale Textextraktion möglich ist.
+3. Bei gescannten PDFs die OCR-Sprache passend setzen, zum Beispiel `eng`, `deu`, `fra`, `chi_sim` oder `chi_tra`.
 4. `Extract Text` ausführen und die Textqualität prüfen.
-5. Bei Bedarf mit OCR-Skalierung oder `PSM` experimentieren.
+5. Falls kein Text gefunden wird, OCR-Sprache, installierte Tesseract-Sprachpakete, Skalierung oder `PSM` prüfen.
 6. Text optional über `Export .txt` speichern.
 
 ## Menüpunkt: Configuration
@@ -203,6 +206,8 @@ Funktionen:
 - Pfad wieder entfernen
 - Zusammenfassung für eine Quelle erzeugen oder aktualisieren
 - Gecachte Zusammenfassung entfernen
+- Einzelne indexierte Quelle aus dem Vector Store löschen
+- Gesamten Vector Store zurücksetzen
 - Aktuelle Speicherorte für Vector Store und Library Store anzeigen
 
 Typischer Workflow:
@@ -211,7 +216,8 @@ Typischer Workflow:
 2. Den Pfad über `Ingest` indexieren.
 3. Zur `Overview` wechseln und prüfen, ob die Quellen sichtbar sind.
 4. Optional in `Configuration` eine Zusammenfassung für eine Quelle cachen.
-5. Danach in `Ask` Fragen stellen oder in `Summarize` Zusammenfassungen ansehen.
+5. Bei Bedarf eine einzelne Quelle löschen oder den Vector Store zurücksetzen.
+6. Danach in `Ask` Fragen stellen oder in `Summarize` Zusammenfassungen ansehen.
 
 ## Lokale Speicherung
 

@@ -38,8 +38,8 @@ Leistungsaspekte:
 
 - Größere Generationsmodelle verbessern Antwortqualität, erhöhen aber Latenz und Speicherbedarf.
 - Embedding-Batches sollten bei knapper Hardware reduziert werden, zum Beispiel `--embedding-batch-size 4`.
-- OCR ist rechenintensiv und sollte nur für PDFs ohne extrahierbaren Text aktiviert werden.
-- Der Vector Store liegt standardmäßig im temporären lokalen Benutzerverzeichnis, nicht zwingend im Repository.
+- OCR ist rechenintensiv und wird in der UI standardmäßig angeboten, aber nur für PDF-Seiten ohne extrahierbaren Text genutzt.
+- Der Vector Store liegt standardmäßig im Projektordner unter `vector_store`.
 
 ## 3. Aktueller Implementierungsstand
 
@@ -57,8 +57,9 @@ Vorhanden:
 - RAG-Pipeline mit Antwort, Quellen, Chunks, Modell und Prompt
 - Dedizierter Map-Reduce-Summarizer für vollständige Dokumentzusammenfassung
 - Retrieval-Evaluation über Markdown-Beispieldateien
-- CLI mit `ingest`, `sources`, `chunks`, `retrieve`, `ask`, `summarize` und `eval`
+- CLI mit `ingest`, `sources`, `delete-source`, `reset-index`, `chunks`, `retrieve`, `ask`, `summarize` und `eval`
 - Lokale Browser-UI mit `Overview`, `Ask`, `Summarize`, `Extract Text` und `Configuration`
+- Indexverwaltung zum Löschen einzelner Quellen und Zurücksetzen des Vector Store
 - Tests für Kernmodule und Ausgabeformatierung
 
 ## 4. Technischer Stack
@@ -285,11 +286,13 @@ OCR für gescannte PDFs aktivieren:
 
 Wichtige OCR-Optionen:
 
-- `--ocr-language`: Tesseract-Sprache, zum Beispiel `eng`, `deu` oder `eng+deu`
+- `--ocr-language`: Tesseract-Sprache, zum Beispiel `eng`, `deu`, `eng+deu`, `fra`, `chi_sim` oder `chi_tra`
 - `--ocr-scale`: Render-Skalierung vor OCR; `3` oder `4` hilft oft bei kleinem Text
 - `--ocr-psm`: Page-Segmentation-Modus; `6` für Textblöcke, `4` für Spalten, `11` für verstreuten Text
 - `--no-ocr-preprocess`: Bildvorverarbeitung deaktivieren
 - `--no-ocr-clean`: Textbereinigung deaktivieren
+
+Die Web UI bietet für OCR-Sprachen eine Dropdownliste mit Englisch, Deutsch, Englisch+Deutsch, Französisch sowie vereinfachtem und traditionellem Chinesisch. Die jeweilige Sprache funktioniert nur, wenn das passende Tesseract-Sprachpaket lokal installiert ist. Bei vollständig leerer Textextraktion zeigt die UI einen Hinweis auf OCR und Tesseract-Sprachpakete. `.txt`-Exporte aus `Extract Text` verwenden einen Dateinamen nach dem Muster `<quelle>-extracted.txt`.
 
 ### Index inspizieren
 
@@ -303,6 +306,18 @@ Chunks einer Quelle anzeigen:
 
 ```powershell
 .\.venv\Scripts\rag-assistant.exe chunks "Lions and Tigers and Snares.pdf" --limit 5 --preview-chars 180
+```
+
+Einzelne Quelle aus dem Index löschen:
+
+```powershell
+.\.venv\Scripts\rag-assistant.exe delete-source "Lions and Tigers and Snares.pdf"
+```
+
+Gesamten Index zurücksetzen:
+
+```powershell
+.\.venv\Scripts\rag-assistant.exe reset-index --yes
 ```
 
 ### Retrieval und Fragen

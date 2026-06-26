@@ -96,6 +96,12 @@ class LibraryStore:
         if keys_to_remove:
             self._write(data)
 
+    def clear_summaries(self) -> None:
+        data = self._read()
+        if data.get("summaries"):
+            data["summaries"] = {}
+            self._write(data)
+
     def _read(self) -> dict[str, Any]:
         if not self.path.exists():
             return {"paths": [], "summaries": {}}

@@ -29,6 +29,16 @@ from rag_assistant.text_splitter import split_documents
 from rag_assistant.vector_store import ChromaVectorStore
 
 
+OCR_LANGUAGE_OPTIONS = [
+    ("eng", "English (eng)"),
+    ("deu", "German (deu)"),
+    ("eng+deu", "English + German (eng+deu)"),
+    ("fra", "French (fra)"),
+    ("chi_sim", "Chinese Simplified (chi_sim)"),
+    ("chi_tra", "Chinese Traditional (chi_tra)"),
+]
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the local browser UI."""
 
@@ -194,7 +204,7 @@ def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
                     )
                     documents = self._extract_text(extract_path, ocr_options=ocr_options)
                     if route == "/extract-text-export":
-                        self._send_text_download("extracted-text.txt", format_extracted_text(documents))
+                        self._send_text_download(_extracted_text_file_name(documents, extract_path), format_extracted_text(documents))
                         return
                     self._send_html(
                         render_page(
@@ -234,6 +244,14 @@ def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
                 if route == "/configuration/remove-summary":
                     self._library_store().remove_summary(source or "")
                     self._send_configuration(selected_source=source, message="Cached summary removed.")
+                    return
+                if route == "/configuration/delete-source":
+                    deleted_count = self._delete_source(source)
+                    self._send_configuration(message=f"Deleted {deleted_count} indexed chunk{'s' if deleted_count != 1 else ''}.")
+                    return
+                if route == "/configuration/reset-index":
+                    deleted_count = self._reset_index()
+                    self._send_configuration(message=f"Reset vector index. Deleted {deleted_count} chunk{'s' if deleted_count != 1 else ''}.")
                     return
                 self._send_html(render_page(active_page="overview", error="Unknown action."))
             except Exception as exc:
@@ -344,6 +362,18 @@ def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
             )
             self._library_store().save_summary(cached)
             return cached
+
+        def _delete_source(self, source: str | None) -> int:
+            if not source:
+                raise ValueError("Select one indexed source before deleting.")
+            deleted_count = self._vector_store().delete_source(source)
+            self._library_store().remove_summary(source)
+            return deleted_count
+
+        def _reset_index(self) -> int:
+            deleted_count = self._vector_store().reset()
+            self._library_store().clear_summaries()
+            return deleted_count
 
         def _send_configuration(
             self,
@@ -643,6 +673,19 @@ def render_configuration_page(
         </div>
       </form>
     </section>
+    <section class="query">
+      <form method="post" action="/configuration/delete-source">
+        {render_source_selector(sources, selected_source, label="Indexed Source", required=True)}
+        <div class="actions">
+          <button class="secondary" type="submit" onclick="return confirm('Delete the selected indexed source?')">Delete Source</button>
+        </div>
+      </form>
+      <form method="post" action="/configuration/reset-index">
+        <div class="actions">
+          <button class="danger" type="submit" onclick="return confirm('Delete all indexed chunks?')">Reset Vector Index</button>
+        </div>
+      </form>
+    </section>
     <section>
       <h2>Storage</h2>
       <dl class="details">
@@ -704,6 +747,10 @@ def render_extract_form(extract_path: str = "", ocr_options: OcrOptions | None =
     preprocess_checked = " checked" if options.preprocess else ""
     clean_checked = " checked" if options.clean_text else ""
     supported = ", ".join(sorted(SUPPORTED_EXTENSIONS))
+    ocr_language_options = "".join(
+        f'<option value="{escape(value)}"{" selected" if options.language == value else ""}>{escape(label)}</option>'
+        for value, label in OCR_LANGUAGE_OPTIONS
+    )
     return f"""
     <section class="query">
       <form method="post" action="/extract-text">
@@ -713,10 +760,11 @@ def render_extract_form(extract_path: str = "", ocr_options: OcrOptions | None =
         </label>
         <p class="meta">Supported file types: {escape(supported)}</p>
         <p class="meta">Enable OCR for scanned PDFs or image-only documents.</p>
+        <p class="meta">OCR language uses installed Tesseract codes, for example eng, deu, or eng+deu.</p>
         <div class="controls ocr-controls">
           <label>
             OCR Language
-            <input name="ocr_language" value="{escape(options.language)}" placeholder="eng or eng+deu">
+            <select name="ocr_language">{ocr_language_options}</select>
           </label>
           <label>
             Scale
@@ -833,6 +881,13 @@ def render_extracted_documents(documents: list[Document] | None) -> str:
     if not documents:
         return "<section><h2>Extracted Text</h2><p>No documents loaded.</p></section>"
 
+    warning = ""
+    if all(not document.text.strip() for document in documents):
+        warning = (
+            "<section class=\"message\"><p>No extractable text was found. "
+            "For scanned PDFs, enable OCR and check the OCR language.</p></section>"
+        )
+
     items = []
     for document in documents:
         page = f", page {document.page_number}" if document.page_number is not None else ""
@@ -844,7 +899,7 @@ def render_extracted_documents(documents: list[Document] | None) -> str:
             f"<pre>{escape(document.text.strip() or '[no text extracted]')}</pre>"
             "</article>"
         )
-    return f"<section><h2>Extracted Text</h2>{''.join(items)}</section>"
+    return f"{warning}<section><h2>Extracted Text</h2>{''.join(items)}</section>"
 
 
 def render_cached_summary(summary: CachedSummary | None) -> str:
@@ -935,6 +990,17 @@ def format_extracted_text(documents: list[Document]) -> str:
     return "\n\n".join([header, *sections])
 
 
+def _extracted_text_file_name(documents: list[Document], fallback_path: str = "") -> str:
+    if documents:
+        stem = Path(documents[0].file_name).stem
+    elif fallback_path:
+        stem = Path(fallback_path).stem
+    else:
+        stem = "extracted-text"
+    safe_stem = "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in stem).strip("-_")
+    return f"{safe_stem or 'extracted-text'}-extracted.txt"
+
+
 def _normalize_route(path: str) -> str:
     if path == "/":
         return "/overview"
@@ -1016,6 +1082,7 @@ input.small { max-width: 110px; }
 .actions.compact { margin-top: 10px; }
 button { border: 1px solid #202124; background: #202124; color: #ffffff; padding: 10px 14px; font: inherit; cursor: pointer; }
 button.secondary, .button.secondary { background: #ffffff; color: #202124; }
+button.danger { border-color: #8a2d25; background: #8a2d25; color: #ffffff; }
 .checkbox { display: flex; align-items: center; gap: 8px; font-weight: 700; }
 .checkbox input { width: auto; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #fafafa; border: 1px solid #e7e7e2; padding: 12px; max-height: 420px; overflow: auto; }

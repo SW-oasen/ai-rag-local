@@ -95,6 +95,35 @@ class ChromaVectorStore:
 
         return self.collection.count()
 
+    def delete_source(self, source: str | Path) -> int:
+        """Delete all chunks for one indexed source and return the number removed."""
+
+        try:
+            source_filter = self._build_source_filter(source)
+            result = self.collection.get(where=source_filter, include=["metadatas"])
+            ids = result.get("ids", [])
+            if not ids:
+                return 0
+            self.collection.delete(ids=ids)
+        except VectorStoreError:
+            raise
+        except Exception as exc:
+            raise VectorStoreError("Could not delete source from the Chroma vector store.") from exc
+        return len(ids)
+
+    def reset(self) -> int:
+        """Delete all chunks from the collection and return the number removed."""
+
+        try:
+            result = self.collection.get(include=["metadatas"])
+            ids = result.get("ids", [])
+            if not ids:
+                return 0
+            self.collection.delete(ids=ids)
+        except Exception as exc:
+            raise VectorStoreError("Could not reset the Chroma vector store.") from exc
+        return len(ids)
+
     def get_chunks_by_source(self, source: str | Path) -> list[TextChunk]:
         """Return stored chunks for a source path or file name."""
 

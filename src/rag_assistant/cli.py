@@ -88,6 +88,16 @@ def build_parser() -> ArgumentParser:
     _add_storage_args(sources)
     sources.set_defaults(handler=_handle_sources)
 
+    delete_source = subparsers.add_parser("delete-source", help="Delete one indexed source from the vector index.")
+    delete_source.add_argument("source", type=Path, help="Indexed source path or file name.")
+    _add_storage_args(delete_source)
+    delete_source.set_defaults(handler=_handle_delete_source)
+
+    reset_index = subparsers.add_parser("reset-index", help="Delete all chunks from the vector index.")
+    _add_storage_args(reset_index)
+    reset_index.add_argument("--yes", action="store_true", help="Confirm deleting all indexed chunks.")
+    reset_index.set_defaults(handler=_handle_reset_index)
+
     chunks = subparsers.add_parser("chunks", help="Inspect stored chunks for one indexed source.")
     chunks.add_argument("source", type=Path, help="Indexed source path or file name.")
     _add_storage_args(chunks)
@@ -178,6 +188,21 @@ def _handle_retrieve(args: Namespace) -> int:
 def _handle_sources(args: Namespace) -> int:
     vector_store = _create_vector_store(args)
     print(format_indexed_sources(vector_store.list_sources(), total_chunks=vector_store.count()))
+    return 0
+
+
+def _handle_delete_source(args: Namespace) -> int:
+    deleted_count = _create_vector_store(args).delete_source(args.source)
+    print(f"Deleted chunks: {deleted_count}")
+    return 0
+
+
+def _handle_reset_index(args: Namespace) -> int:
+    if not args.yes:
+        print("Reset aborted. Pass --yes to delete all indexed chunks.")
+        return 1
+    deleted_count = _create_vector_store(args).reset()
+    print(f"Deleted chunks: {deleted_count}")
     return 0
 
 
