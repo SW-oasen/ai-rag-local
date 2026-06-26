@@ -39,7 +39,7 @@ class ChromaVectorStore:
                 f"Could not open Chroma vector store at '{persist_directory}'. "
                 "If this path is on a drive where SQLite/Chroma cannot write reliably, "
                 "try a different path with --vector-store, for example "
-                "$env:TEMP\\local_rag_vector_store."
+                "$env:LOCALAPPDATA\\local_rag_assistant\\vector_store."
             ) from exc
 
     def add_chunks(self, chunks: list[TextChunk]) -> None:

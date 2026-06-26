@@ -14,6 +14,7 @@ from rag_assistant.config import (
     DEFAULT_LLM_MODEL,
     DEFAULT_TOP_K,
     PROCESSED_DATA_DIR,
+    PROJECT_ROOT,
     VECTOR_STORE_DIR,
 )
 from rag_assistant.document_loader import SUPPORTED_EXTENSIONS, OcrOptions, load_documents
@@ -535,8 +536,8 @@ def render_overview(
       <h2>Library</h2>
       <dl class="details">
         <dt>Supported files</dt><dd>{escape(supported)}</dd>
-        <dt>Vector store</dt><dd>{escape(str(vector_store_path or 'default'))}</dd>
-        <dt>Library store</dt><dd>{escape(str(library_store_path or 'default'))}</dd>
+        <dt>Vector store</dt><dd>{escape(_display_path(vector_store_path))}</dd>
+        <dt>Library store</dt><dd>{escape(_display_path(library_store_path))}</dd>
       </dl>
     </section>
     {render_sources(sources)}"""
@@ -645,8 +646,8 @@ def render_configuration_page(
     <section>
       <h2>Storage</h2>
       <dl class="details">
-        <dt>Vector store</dt><dd>{escape(str(vector_store_path or 'default'))}</dd>
-        <dt>Library store</dt><dd>{escape(str(library_store_path or 'default'))}</dd>
+        <dt>Vector store</dt><dd>{escape(_display_path(vector_store_path))}</dd>
+        <dt>Library store</dt><dd>{escape(_display_path(library_store_path))}</dd>
       </dl>
     </section>"""
 
@@ -698,7 +699,7 @@ def render_query_form(
 
 
 def render_extract_form(extract_path: str = "", ocr_options: OcrOptions | None = None) -> str:
-    options = ocr_options or OcrOptions()
+    options = ocr_options or OcrOptions(enabled=True)
     checked = " checked" if options.enabled else ""
     preprocess_checked = " checked" if options.preprocess else ""
     clean_checked = " checked" if options.clean_text else ""
@@ -711,6 +712,7 @@ def render_extract_form(extract_path: str = "", ocr_options: OcrOptions | None =
           <input name="extract_path" value="{escape(extract_path)}" placeholder="data/raw/example.pdf">
         </label>
         <p class="meta">Supported file types: {escape(supported)}</p>
+        <p class="meta">Enable OCR for scanned PDFs or image-only documents.</p>
         <div class="controls ocr-controls">
           <label>
             OCR Language
@@ -907,20 +909,30 @@ def format_cached_summary(summary: CachedSummary, export_format: str = "md") -> 
 
 
 def format_extracted_text(documents: list[Document]) -> str:
+    if not documents:
+        return ""
+
+    source_paths = []
+    for document in documents:
+        source_path = str(document.source_path)
+        if source_path not in source_paths:
+            source_paths.append(source_path)
+
     sections = []
     for document in documents:
-        page = f", page {document.page_number}" if document.page_number is not None else ""
+        title = f"# Page {document.page_number}" if document.page_number is not None else "# Text"
         sections.append(
             "\n".join(
                 [
-                    f"# {document.file_name}{page}",
-                    f"Path: {document.source_path}",
+                    title,
                     "",
                     document.text.strip() or "[no text extracted]",
                 ]
             )
         )
-    return "\n\n".join(sections)
+
+    header = "\n".join(f"Source: {source_path}" for source_path in source_paths)
+    return "\n\n".join([header, *sections])
 
 
 def _normalize_route(path: str) -> str:
@@ -967,6 +979,17 @@ def _preview(text: str, max_chars: int) -> str:
     if len(normalized) <= max_chars:
         return normalized
     return normalized[: max_chars - 3].rstrip() + "..."
+
+
+def _display_path(path: Path | None) -> str:
+    if path is None:
+        return "default"
+    if not path.is_absolute():
+        return str(path)
+    try:
+        return str(path.resolve().relative_to(PROJECT_ROOT.resolve()))
+    except ValueError:
+        return str(path)
 
 
 def _styles() -> str:

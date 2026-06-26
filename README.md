@@ -15,6 +15,27 @@ Die README beschreibt vor allem die lokale Weboberfläche. Technische Details, A
 - Textextraktion mit Vorschau und `.txt`-Export
 - Lokale Konfiguration von Dokumentpfaden und Speicherorten
 
+## Architektur
+
+```text
+Lokale Dokumente laden
+    |
+    v
+Chunking, Embedding -> ChromDB
+    |
+    v
+Text exahieren  -> Auch gescannte PDFs und Bilder mit OCR
+    |
+    v
+Fragen - Zusammenfassen
+    |
+    v
+Lokale LLMs
+    |
+    v
+Antworten mit Quellenangaben
+```
+
 ## Voraussetzungen
 
 - Python 3.10 oder neuer
@@ -194,10 +215,10 @@ Typischer Workflow:
 
 ## Lokale Speicherung
 
-Der ChromaDB-Index wird standardmäßig unter einem temporären lokalen Pfad gespeichert:
+Der ChromaDB-Index wird standardmäßig im Projektordner gespeichert:
 
 ```powershell
-$env:TEMP\local_rag_assistant\vector_store
+.\vector_store
 ```
 
 Der UI-Store für konfigurierte Pfade und gecachte Zusammenfassungen liegt standardmäßig unter:
@@ -206,7 +227,7 @@ Der UI-Store für konfigurierte Pfade und gecachte Zusammenfassungen liegt stand
 data/processed/web_library.json
 ```
 
-Wenn ChromaDB auf einem Projektlaufwerk einen SQLite-Disk-I/O-Fehler meldet, ist ein Vector-Store-Pfad auf einem anderen lokalen Laufwerk oft die einfachste Lösung. Details und CLI-Optionen stehen in `project_context.md`.
+Der Ordner `vector_store` ist in `.gitignore` ausgeschlossen und kann lokal jederzeit neu aufgebaut werden. Wenn ChromaDB auf einem Projektlaufwerk einen SQLite-Disk-I/O-Fehler meldet, ist ein Vector-Store-Pfad auf einem anderen lokalen Laufwerk oft die einfachste Lösung. Details und CLI-Optionen stehen in `project_context.md`.
 
 ## Tests
 
@@ -235,4 +256,4 @@ Die Tests prüfen unter anderem Dokumentladen, Chunking, Retrieval, Prompt-Erste
 ---
 
 Autor: Yuchuan Liu
-Letzte Aktualisierung: 2026-06-25
+Letzte Aktualisierung: 2026-06-26

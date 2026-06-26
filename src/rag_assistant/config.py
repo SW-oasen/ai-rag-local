@@ -10,13 +10,7 @@ PROCESSED_DATA_DIR = DATA_DIR / "processed"
 
 
 def _default_vector_store_dir() -> Path:
-    temp_dir = os.getenv("TEMP")
-    if temp_dir:
-        return Path(temp_dir) / "local_rag_assistant" / "vector_store"
-    app_data = os.getenv("LOCALAPPDATA")
-    if app_data:
-        return Path(app_data) / "local_rag_assistant" / "vector_store"
-    return Path.home() / ".local_rag_assistant" / "vector_store"
+    return PROJECT_ROOT / "vector_store"
 
 
 VECTOR_STORE_DIR = Path(os.getenv("RAG_VECTOR_STORE_DIR", _default_vector_store_dir()))

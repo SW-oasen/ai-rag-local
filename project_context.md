@@ -176,7 +176,7 @@ Repository-nahe Verzeichnisse:
 
 Vector Store:
 
-- Standard: `%TEMP%\local_rag_assistant\vector_store`
+- Standard: `vector_store` im Projektordner
 - Überschreibbar über `RAG_VECTOR_STORE_DIR`
 - Überschreibbar pro Befehl über `--vector-store`
 
@@ -382,7 +382,7 @@ JSON-Report schreiben:
 Wenn ChromaDB auf einem Projektlaufwerk einen SQLite-Disk-I/O-Fehler meldet, kann ein Vector-Store-Pfad auf einem anderen lokalen Laufwerk genutzt werden:
 
 ```powershell
-$env:RAG_VECTOR_STORE_DIR = "$env:TEMP\local_rag_vector_store"
+$env:RAG_VECTOR_STORE_DIR = "$env:LOCALAPPDATA\local_rag_assistant\vector_store"
 .\.venv\Scripts\rag-assistant.exe ingest data/raw --vector-store $env:RAG_VECTOR_STORE_DIR
 ```
 
