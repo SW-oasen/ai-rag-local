@@ -6,11 +6,11 @@ Die README beschreibt vor allem die lokale Weboberfläche. Technische Details, A
 
 ## Funktionen
 
-- Lokale Dokumentbibliothek für Markdown-, Text- und PDF-Dateien
+- Lokale Dokumentbibliothek für Markdown-, Text-, PDF-, EPUB-, AZW3- und OpenDocument-Dateien
 - Optionales OCR für gescannte PDFs über Tesseract
 - Semantische Suche über lokale Embeddings
 - Frage-Antwort-Funktion mit lokalem LLM
-- Quellenanzeige für Antworten und gefundene Chunks
+- Markdown-formatierte Antworten mit Quellenanzeige
 - Dokumentzusammenfassungen mit Cache und Export
 - Textextraktion mit Vorschau und `.txt`-Export
 - Lokale Konfiguration von Dokumentpfaden und Speicherorten
@@ -43,6 +43,7 @@ Antworten mit Quellenangaben
 - Ein lokal installiertes Embedding-Modell
 - Ein lokal installiertes Generationsmodell
 - Optional: Tesseract OCR für gescannte PDFs
+- Optional: Calibre für AZW3-Textextraktion (`ebook-convert`)
 
 Empfohlene Modelle:
 
@@ -86,6 +87,12 @@ tesseract --list-langs
 ```
 
 Die OCR-Dropdownliste in der Web UI bietet Englisch (`eng`), Deutsch (`deu`), Englisch+Deutsch (`eng+deu`), Französisch (`fra`), vereinfachtes Chinesisch (`chi_sim`) und traditionelles Chinesisch (`chi_tra`). Die jeweilige Sprache funktioniert nur, wenn das passende Tesseract-Sprachpaket lokal installiert ist.
+
+AZW3-Dateien benötigen Calibre. Nach der Installation muss `ebook-convert` im `PATH` verfügbar sein:
+
+```powershell
+ebook-convert --version
+```
 
 ## Web UI Starten
 
@@ -135,7 +142,7 @@ Funktionen:
 - Anzahl der abgerufenen Chunks über `Top K` steuern
 - Nur Retrieval ausführen, ohne eine LLM-Antwort zu erzeugen
 - Antwort mit lokalem LLM erzeugen
-- Quellen der Antwort anzeigen
+- Markdown-formatierte Antwort mit Überschriften, Listen, Fettschrift und Quellen anzeigen
 - Gefundene Chunks mit Score und Textvorschau prüfen
 
 Typischer Workflow:
@@ -160,6 +167,7 @@ Funktionen:
 - Zusammenfassung als Markdown exportieren
 - Zusammenfassung als Textdatei exportieren
 - Anzahl der Teilsummaries nachvollziehen
+- Fortschritt bei längeren Zusammenfassungen verfolgen
 
 Typischer Workflow:
 
@@ -169,6 +177,7 @@ Typischer Workflow:
 4. Ergebnis über `Export .md` oder `Export .txt` speichern.
 
 Die Zusammenfassung nutzt einen eigenen Ablauf über alle Chunks der Quelle. Sie ist nicht nur eine normale Top-k-Frage.
+Bei längeren Dokumenten zeigt die Web UI Fortschrittsmeldungen pro Chunk-Gruppe und finalem Merge an.
 
 ## Menüpunkt: Extract Text
 
@@ -201,8 +210,8 @@ Typischer Workflow:
 Funktionen:
 
 - Dokumentpfad hinzufügen
-- Konfigurierte Pfade anzeigen
-- Einzelnen Pfad indexieren
+- Konfigurierte Pfade mit Index-Status anzeigen
+- Neue oder geänderte Pfade indexieren
 - Pfad wieder entfernen
 - Zusammenfassung für eine Quelle erzeugen oder aktualisieren
 - Gecachte Zusammenfassung entfernen
@@ -218,6 +227,14 @@ Typischer Workflow:
 4. Optional in `Configuration` eine Zusammenfassung für eine Quelle cachen.
 5. Bei Bedarf eine einzelne Quelle löschen oder den Vector Store zurücksetzen.
 6. Danach in `Ask` Fragen stellen oder in `Summarize` Zusammenfassungen ansehen.
+
+Die Aktionen in `Configured Paths` hängen vom Status ab:
+
+- `Not indexed`: Pfad kann mit `Ingest` indexiert werden
+- `Indexed`: bereits indexierte Einzeldatei kann über `Delete Index` aus der Vector DB entfernt werden
+- `Indexed folder`: alle unterstützten Dateien im Ordner sind indexiert; `Re-ingest Folder` baut den Ordner erneut auf
+- `Partially indexed folder`: nur ein Teil der unterstützten Dateien ist indexiert; `Ingest Missing` zieht fehlende Dateien nach
+- `Remove Path`: entfernt nur den Pfad aus der UI-Konfiguration, nicht automatisch den Vector-Store-Eintrag
 
 ## Lokale Speicherung
 
@@ -248,6 +265,7 @@ Die Tests prüfen unter anderem Dokumentladen, Chunking, Retrieval, Prompt-Erste
 - Die Qualität hängt stark vom lokalen Modell ab.
 - PDF-Extraktion kann bei komplexem Layout, Tabellen und Scans unvollständig sein.
 - OCR ist langsamer und benötigt eine lokale Tesseract-Installation.
+- AZW3-Extraktion benötigt Calibre `ebook-convert` auf dem `PATH`.
 - Semantisches Retrieval ist nicht perfekt; relevante Chunks sollten in `Ask` zuerst mit `Retrieve` geprüft werden.
 - Antworten sollen aus dem bereitgestellten Kontext entstehen, können aber bei schwachem Modell oder unpassendem Kontext trotzdem Fehler enthalten.
 
@@ -262,4 +280,4 @@ Die Tests prüfen unter anderem Dokumentladen, Chunking, Retrieval, Prompt-Erste
 ---
 
 Autor: Yuchuan Liu
-Letzte Aktualisierung: 2026-06-26
+Letzte Aktualisierung: 2026-06-27

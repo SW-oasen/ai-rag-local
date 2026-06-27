@@ -68,11 +68,26 @@ def build_parser() -> ArgumentParser:
     ingest.add_argument("path", type=Path, help="File or directory to ingest.")
     _add_storage_args(ingest)
     ingest.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE)
-    ingest.add_argument("--chunk-overlap", type=int, default=DEFAULT_CHUNK_OVERLAP)
+    ingest.add_argument(
+        "--chunk-overlap",
+        type=int,
+        default=DEFAULT_CHUNK_OVERLAP,
+        help="Number of characters repeated between neighboring chunks so context is not cut off.",
+    )
     ingest.add_argument("--ocr", action="store_true", help="Run OCR on PDF pages with no selectable text.")
     ingest.add_argument("--ocr-language", default="eng", help="Tesseract OCR language code.")
-    ingest.add_argument("--ocr-scale", type=float, default=3.0, help="PDF render scale for OCR.")
-    ingest.add_argument("--ocr-psm", type=int, default=6, help="Tesseract page segmentation mode.")
+    ingest.add_argument(
+        "--ocr-scale",
+        type=float,
+        default=3.0,
+        help="Zoom factor for rendering PDF pages before OCR; higher values can improve text recognition but are slower.",
+    )
+    ingest.add_argument(
+        "--ocr-psm",
+        type=int,
+        default=6,
+        help="How Tesseract should read the page layout; 6 works well for one clear block of text.",
+    )
     ingest.add_argument("--no-ocr-preprocess", action="store_true", help="Disable OCR image preprocessing.")
     ingest.add_argument("--no-ocr-clean", action="store_true", help="Disable OCR text cleanup.")
     ingest.set_defaults(handler=_handle_ingest)
@@ -121,7 +136,12 @@ def build_parser() -> ArgumentParser:
     summarize.add_argument("--llm-model", default=DEFAULT_LLM_MODEL)
     summarize.add_argument("--temperature", type=float, default=0.1)
     summarize.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE)
-    summarize.add_argument("--chunk-overlap", type=int, default=DEFAULT_CHUNK_OVERLAP)
+    summarize.add_argument(
+        "--chunk-overlap",
+        type=int,
+        default=DEFAULT_CHUNK_OVERLAP,
+        help="Number of characters repeated between neighboring chunks so context is not cut off.",
+    )
     summarize.add_argument("--max-chunks-per-group", type=int, default=4)
     summarize.add_argument("--question", default=None, help="Optional focus question for the summary.")
     summarize.add_argument(
@@ -356,7 +376,7 @@ def format_source_chunks(
 def format_rag_answer(answer: RagAnswer, show_prompt: bool = False) -> str:
     """Format a RAG answer for terminal output."""
 
-    lines = [answer.answer, "", "Sources:"]
+    lines = [answer.answer, "", "## Sources"]
     if answer.sources:
         for index, source in enumerate(answer.sources, start=1):
             page = f", page {source.page_number}" if source.page_number is not None else ""

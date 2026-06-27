@@ -627,23 +627,42 @@ def render_configuration_page(
     path_rows = []
     for configured_path in configured_paths:
         value = escape(configured_path.path)
+        matched_sources = _sources_for_configured_path(configured_path.path, sources)
+        exact_source = _exact_source_for_configured_path(configured_path.path, sources)
+        status = _configured_path_status(configured_path.path, matched_sources, exact_source)
+        actions = []
+        if exact_source is not None:
+            source_value = escape(str(exact_source.source_path))
+            actions.append(
+                '<form method="post" action="/configuration/delete-source">'
+                f'<input type="hidden" name="source" value="{source_value}">'
+                '<button class="secondary" type="submit" '
+                'onclick="return confirm(\'Delete this indexed source?\')">Delete Index</button>'
+                "</form>"
+            )
+        else:
+            ingest_label = _configured_path_ingest_label(configured_path.path, matched_sources)
+            actions.append(
+                '<form method="post" action="/configuration/ingest-path">'
+                f'<input type="hidden" name="document_path" value="{value}">'
+                f'<button type="submit">{ingest_label}</button>'
+                "</form>"
+            )
+        actions.append(
+            '<form method="post" action="/configuration/remove-path">'
+            f'<input type="hidden" name="document_path" value="{value}">'
+            '<button class="secondary" type="submit">Remove Path</button>'
+            "</form>"
+        )
         path_rows.append(
             "<tr>"
             f"<td>{value}</td>"
-            "<td class=\"row-actions\">"
-            '<form method="post" action="/configuration/ingest-path">'
-            f'<input type="hidden" name="document_path" value="{value}">'
-            '<button type="submit">Ingest</button>'
-            "</form>"
-            '<form method="post" action="/configuration/remove-path">'
-            f'<input type="hidden" name="document_path" value="{value}">'
-            '<button class="secondary" type="submit">Remove</button>'
-            "</form>"
-            "</td>"
+            f"<td>{escape(status)}</td>"
+            f"<td class=\"row-actions\">{''.join(actions)}</td>"
             "</tr>"
         )
     paths_table = (
-        "<table><thead><tr><th>Path</th><th>Actions</th></tr></thead>"
+        "<table><thead><tr><th>Path</th><th>Status</th><th>Actions</th></tr></thead>"
         f"<tbody>{''.join(path_rows)}</tbody></table>"
         if path_rows
         else "<p>No configured document paths yet.</p>"
@@ -693,6 +712,106 @@ def render_configuration_page(
         <dt>Library store</dt><dd>{escape(_display_path(library_store_path))}</dd>
       </dl>
     </section>"""
+
+
+def _configured_path_status(
+    path: str,
+    matched_sources: list[IndexedSource],
+    exact_source: IndexedSource | None,
+) -> str:
+    if exact_source is not None:
+        pages = f", pages {exact_source.page_count}" if exact_source.page_count is not None else ""
+        return f"Indexed ({exact_source.chunk_count} chunks{pages})"
+    supported_file_count = _supported_file_count(path)
+    if supported_file_count is not None and supported_file_count > 0:
+        chunk_count = sum(source.chunk_count for source in matched_sources)
+        if len(matched_sources) >= supported_file_count:
+            return f"Indexed folder ({len(matched_sources)} sources, {chunk_count} chunks)"
+        if matched_sources:
+            return (
+                f"Partially indexed folder "
+                f"({len(matched_sources)}/{supported_file_count} sources, {chunk_count} chunks)"
+            )
+        return f"Not indexed ({supported_file_count} supported files)"
+    if matched_sources:
+        chunk_count = sum(source.chunk_count for source in matched_sources)
+        return f"Contains {len(matched_sources)} indexed source{'s' if len(matched_sources) != 1 else ''} ({chunk_count} chunks)"
+    return "Not indexed"
+
+
+def _configured_path_ingest_label(path: str, matched_sources: list[IndexedSource]) -> str:
+    supported_file_count = _supported_file_count(path)
+    if supported_file_count is not None and supported_file_count > 0:
+        if len(matched_sources) >= supported_file_count:
+            return "Re-ingest Folder"
+        if matched_sources:
+            return "Ingest Missing"
+    return "Ingest Updates" if matched_sources else "Ingest"
+
+
+def _exact_source_for_configured_path(path: str, sources: list[IndexedSource]) -> IndexedSource | None:
+    configured = _normalized_path_variants(path)
+    for source in sources:
+        source_variants = _normalized_path_variants(str(source.source_path)) | {source.file_name.lower()}
+        if configured & source_variants:
+            return source
+    return None
+
+
+def _sources_for_configured_path(path: str, sources: list[IndexedSource]) -> list[IndexedSource]:
+    exact_source = _exact_source_for_configured_path(path, sources)
+    if exact_source is not None:
+        return [exact_source]
+
+    configured = Path(path)
+    if not _looks_like_directory_path(configured):
+        return []
+
+    return [
+        source
+        for source in sources
+        if _path_is_relative_to(source.source_path, configured)
+        or _path_is_relative_to(Path(str(source.source_path)), configured)
+    ]
+
+
+def _looks_like_directory_path(path: Path) -> bool:
+    return path.is_dir() or path.suffix.lower() not in SUPPORTED_EXTENSIONS
+
+
+def _supported_file_count(path: str) -> int | None:
+    configured = Path(path)
+    if not configured.is_dir():
+        return None
+    return sum(
+        1
+        for candidate in configured.rglob("*")
+        if candidate.is_file() and candidate.suffix.lower() in SUPPORTED_EXTENSIONS
+    )
+
+
+def _path_is_relative_to(path: Path, parent: Path) -> bool:
+    for candidate in _path_candidates(path):
+        for parent_candidate in _path_candidates(parent):
+            try:
+                candidate.relative_to(parent_candidate)
+                return True
+            except ValueError:
+                continue
+    return False
+
+
+def _normalized_path_variants(path: str) -> set[str]:
+    return {str(candidate).lower() for candidate in _path_candidates(Path(path))}
+
+
+def _path_candidates(path: Path) -> set[Path]:
+    candidates = {path}
+    try:
+        candidates.add(path.resolve(strict=False))
+    except OSError:
+        pass
+    return candidates
 
 
 def render_source_selector(
@@ -851,7 +970,7 @@ def render_answer(answer: RagAnswer | None) -> str:
     return f"""
     <section>
       <h2>Answer</h2>
-      <p>{escape(answer.answer)}</p>
+      <div class="markdown-text">{format_markdown_html(answer.answer)}</div>
       <h3>Sources</h3>
       <ul>{sources or '<li>No sources returned.</li>'}</ul>
     </section>"""
@@ -868,7 +987,7 @@ def render_summary(summary: SummaryResult | None) -> str:
     return f"""
     <section>
       <h2>Summary</h2>
-      <p>{escape(summary.summary)}</p>
+      <div class="summary-text">{format_summary_html(summary.summary)}</div>
       <h3>Sources</h3>
       <ul>{sources or '<li>No sources returned.</li>'}</ul>
       <p class="meta">Partial summaries: {len(summary.partial_summaries)}</p>
@@ -933,10 +1052,171 @@ def render_error(error: str | None) -> str:
 
 
 def format_summary_html(text: str) -> str:
-    blocks = [block.strip() for block in text.split("\n\n") if block.strip()]
-    if not blocks:
-        return "<p>[empty summary]</p>"
-    return "".join(f"<p>{escape(block).replace(chr(10), '<br>')}</p>" for block in blocks)
+    return format_markdown_html(text, empty_label="[empty summary]")
+
+
+def format_markdown_html(text: str, empty_label: str = "[empty answer]") -> str:
+    lines = text.splitlines()
+    html: list[str] = []
+    paragraph: list[str] = []
+    list_items: list[str] = []
+    ordered_items: list[tuple[str, list[str]]] = []
+    grouped_items: list[str] = []
+    code_lines: list[str] = []
+    in_code_block = False
+    pending_group_heading: str | None = None
+
+    def flush_paragraph() -> None:
+        if paragraph:
+            html.append(f"<p>{'<br>'.join(_format_markdown_inline(line) for line in paragraph)}</p>")
+            paragraph.clear()
+
+    def flush_list() -> None:
+        if list_items:
+            html.append(f"<ul>{''.join(f'<li>{_format_markdown_inline(item)}</li>' for item in list_items)}</ul>")
+            list_items.clear()
+
+    def flush_ordered_list() -> None:
+        if ordered_items:
+            items: list[str] = []
+            for item, nested_items in ordered_items:
+                nested = "".join(f"<li>{_format_markdown_inline(nested_item)}</li>" for nested_item in nested_items)
+                items.append(
+                    f"<li>{_format_markdown_inline(item)}"
+                    f"{f'<ul>{nested}</ul>' if nested else ''}"
+                    "</li>"
+                )
+            html.append(f"<ol>{''.join(items)}</ol>")
+            ordered_items.clear()
+
+    def flush_group() -> None:
+        nonlocal pending_group_heading
+        if pending_group_heading is not None:
+            items = "".join(f"<li>{_format_markdown_inline(item)}</li>" for item in grouped_items)
+            html.append(
+                "<div class=\"markdown-group\">"
+                f"<p class=\"markdown-group-title\">{_format_markdown_inline(pending_group_heading)}</p>"
+                f"{f'<ul>{items}</ul>' if items else ''}"
+                "</div>"
+            )
+            pending_group_heading = None
+            grouped_items.clear()
+
+    def flush_code() -> None:
+        if code_lines:
+            html.append(f"<pre><code>{escape(chr(10).join(code_lines))}</code></pre>")
+            code_lines.clear()
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            if in_code_block:
+                flush_code()
+                in_code_block = False
+            else:
+                flush_paragraph()
+                flush_list()
+                flush_ordered_list()
+                flush_group()
+                in_code_block = True
+            continue
+        if in_code_block:
+            code_lines.append(line)
+            continue
+        if not stripped:
+            flush_paragraph()
+            flush_list()
+            flush_group()
+            continue
+        heading = _markdown_heading(stripped)
+        if heading is not None:
+            level, heading_text = heading
+            flush_paragraph()
+            flush_list()
+            flush_ordered_list()
+            flush_group()
+            tag = "h3" if level <= 2 else "h4"
+            html.append(f"<{tag}>{_format_markdown_inline(heading_text)}</{tag}>")
+            continue
+        if pending_group_heading is not None:
+            grouped_items.append(stripped.removeprefix("- ").removeprefix("* ").strip())
+            continue
+        if stripped.startswith(("- ", "* ")):
+            flush_paragraph()
+            flush_group()
+            if ordered_items:
+                ordered_items[-1][1].append(stripped[2:].strip())
+            else:
+                list_items.append(stripped[2:].strip())
+            continue
+        ordered_item = _ordered_list_item(stripped)
+        if ordered_item is not None:
+            flush_paragraph()
+            flush_list()
+            flush_group()
+            ordered_items.append((ordered_item, []))
+            continue
+        if _looks_like_group_heading(stripped):
+            flush_paragraph()
+            flush_list()
+            flush_ordered_list()
+            flush_group()
+            pending_group_heading = stripped
+            continue
+        flush_ordered_list()
+        paragraph.append(stripped)
+
+    if in_code_block:
+        flush_code()
+    flush_paragraph()
+    flush_list()
+    flush_ordered_list()
+    flush_group()
+    return "".join(html) if html else f"<p>{escape(empty_label)}</p>"
+
+
+def _markdown_heading(line: str) -> tuple[int, str] | None:
+    marker, separator, text = line.partition(" ")
+    if separator and 1 <= len(marker) <= 6 and set(marker) == {"#"} and text.strip():
+        return len(marker), text.strip()
+    return None
+
+
+def _looks_like_group_heading(line: str) -> bool:
+    if not line.endswith(":"):
+        return False
+    if line.startswith(("[", "http://", "https://")):
+        return False
+    return len(line) <= 100
+
+
+def _ordered_list_item(line: str) -> str | None:
+    marker, separator, text = line.partition(". ")
+    if separator and marker.isdigit() and text.strip():
+        return text.strip()
+    return None
+
+
+def _format_markdown_inline(text: str) -> str:
+    escaped = escape(text)
+    parts = escaped.split("**")
+    if len(parts) < 3:
+        return escaped
+
+    formatted: list[str] = [parts[0]]
+    index = 1
+    while index + 1 < len(parts):
+        bold_text = parts[index]
+        trailing_text = parts[index + 1]
+        if bold_text:
+            formatted.append(f"<strong>{bold_text}</strong>")
+        else:
+            formatted.append("****")
+        formatted.append(trailing_text)
+        index += 2
+    if index < len(parts):
+        formatted.append("**" + parts[index])
+    return "".join(formatted)
 
 
 def format_cached_summary(summary: CachedSummary, export_format: str = "md") -> str:
@@ -1097,7 +1377,16 @@ article { background: #ffffff; border: 1px solid #d5dbe3; padding: 14px; margin-
 .details dd { margin: 0; overflow-wrap: anywhere; }
 .row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .row-actions form { margin: 0; }
-.summary-text { background: #ffffff; border: 1px solid #d5dbe3; padding: 16px; }
+.summary-text, .markdown-text { background: #ffffff; border: 1px solid #d5dbe3; padding: 16px; }
+.summary-text > :first-child, .markdown-text > :first-child { margin-top: 0; }
+.summary-text > :last-child, .markdown-text > :last-child { margin-bottom: 0; }
+.markdown-text ul, .summary-text ul, .markdown-text ol, .summary-text ol { padding-left: 26px; }
+.markdown-text li > ul, .summary-text li > ul { margin-top: 10px; padding-left: 28px; }
+.markdown-text li, .summary-text li { margin: 4px 0; }
+.markdown-text pre, .summary-text pre { max-height: none; }
+.markdown-group { margin: 14px 0; }
+.markdown-group-title { font-weight: 700; margin: 0 0 10px; }
+.markdown-group ul { margin: 0 0 0 18px; padding-left: 20px; }
 .meta { color: #60635d; font-size: 13px; margin: 0 0 8px; }
 .error { border-left: 4px solid #a6342e; background: #fff4f2; padding: 14px; }
 .message { border-left: 4px solid #2d6a4f; background: #eff8f3; padding: 12px 14px; }

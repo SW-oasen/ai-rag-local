@@ -15,6 +15,8 @@ Rules:
 - Cite sources using the source labels from the context, such as [source 1].
 - Answer in the same language as the user question when possible.
 - Keep the answer concise and technically accurate.
+- Format the answer as Markdown. Use short headings, bullet lists, numbered steps, or tables when they make the answer easier to read.
+- Do not wrap the whole answer in a code block.
 
 Context:
 {context}
@@ -41,4 +43,3 @@ def _format_context(retrieval_results: list[RetrievalResult]) -> str:
         blocks.append(f"{label}\n{chunk.text}")
 
     return "\n\n".join(blocks)
-

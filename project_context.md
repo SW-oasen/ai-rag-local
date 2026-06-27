@@ -45,7 +45,7 @@ Leistungsaspekte:
 
 Vorhanden:
 
-- Dokumentladen für Markdown, Text und PDFs
+- Dokumentladen für Markdown, Text, PDFs, EPUB, AZW3 und OpenDocument-Dateien
 - Optionales OCR für PDF-Seiten ohne verwertbaren Text
 - Text-Splitting mit Chunk-Größe, Überlappung und Boundary-Verbesserungen
 - Metadaten je Chunk, darunter Quelle, Dateiname, Chunk-Index, Seitenzahl und Zeichenbereiche
@@ -56,10 +56,13 @@ Vorhanden:
 - Ollama-LLM-Client
 - RAG-Pipeline mit Antwort, Quellen, Chunks, Modell und Prompt
 - Dedizierter Map-Reduce-Summarizer für vollständige Dokumentzusammenfassung
+- Fortschrittsmeldungen für dokumentweite Zusammenfassungen
+- Markdown-Rendering in der Web UI für Antworten und Zusammenfassungen
 - Retrieval-Evaluation über Markdown-Beispieldateien
 - CLI mit `ingest`, `sources`, `delete-source`, `reset-index`, `chunks`, `retrieve`, `ask`, `summarize` und `eval`
 - Lokale Browser-UI mit `Overview`, `Ask`, `Summarize`, `Extract Text` und `Configuration`
 - Indexverwaltung zum Löschen einzelner Quellen und Zurücksetzen des Vector Store
+- Statusbasierte `Configured Paths` in der Web UI
 - Tests für Kernmodule und Ausgabeformatierung
 
 ## 4. Technischer Stack
@@ -79,6 +82,10 @@ Optionale OCR-Technologien:
 - pytesseract
 - Pillow
 - pypdfium2
+
+Optionale E-Book-Technologien:
+
+- Calibre `ebook-convert` für AZW3-Textextraktion
 
 Bewusste Entscheidungen:
 
@@ -147,10 +154,17 @@ Zusammenfassungen laufen bewusst nicht über normales Top-k-Retrieval. Für voll
 4. Teilsummaries zu einer finalen Zusammenfassung verdichten
 5. Quellen und Anzahl der Teilsummaries ausgeben
 
+Die CLI und Web UI können dabei Fortschrittsmeldungen ausgeben:
+
+- Anzahl der Chunks und Gruppen
+- Start und Ende jeder Gruppe
+- Dauer pro Gruppe
+- Start und Ende des finalen Merge-Schritts
+
 ## 6. Modulübersicht
 
 - `config.py`: Standardpfade, Modellnamen, Chunk-Parameter und Retrieval-Defaults
-- `document_loader.py`: Text- und PDF-Laden, OCR-Optionen, Dokumentmetadaten
+- `document_loader.py`: Text-, PDF-, EPUB-, AZW3- und OpenDocument-Laden, OCR-Optionen, Dokumentmetadaten
 - `text_splitter.py`: Chunking mit Überlappung und Boundary-Logik
 - `embeddings.py`: Ollama-Embedding-Provider und Fehlerbehandlung
 - `vector_store.py`: ChromaDB-Persistenz, Quellenlisten, Chunk-Zugriff
@@ -216,8 +230,20 @@ Der RAG-Prompt soll das Modell zu folgenden Verhaltensweisen führen:
 - Quellen referenzieren
 - Nicht belegte Details vermeiden
 - In der Sprache der Nutzerfrage antworten, wenn möglich
+- Antworten als Markdown strukturieren, zum Beispiel mit Überschriften, Listen, nummerierten Schritten und Fettschrift
 
 Für Debugging kann der vollständige Prompt mit `--show-prompt` angezeigt werden.
+
+Die Web UI rendert einen bewusst kleinen, sicheren Markdown-Subset:
+
+- Überschriften `#` bis `######`
+- ungeordnete und nummerierte Listen
+- verschachtelte Bulletpoints unter nummerierten Punkten
+- Fettschrift mit `**...**`
+- Codeblöcke
+- gruppenartige Zeilen mit Doppelpunkt als Überschrift mit eingerückten Unterpunkten
+
+HTML wird dabei escaped; die UI rendert keine ungeprüfte Roh-HTML-Ausgabe.
 
 ## 10. Retrieval-Ansatz
 
@@ -340,6 +366,8 @@ Frage mit lokaler Antwortgenerierung:
 .\.venv\Scripts\rag-assistant.exe ask "Fasse die Dokumente zusammen." --llm-model qwen3:8b
 ```
 
+Die Antwort wird als Markdown angefordert. In der Web UI wird ein sicherer Markdown-Subset formatiert dargestellt; in der CLI bleibt die Markdown-Ausgabe als Text sichtbar.
+
 Prompt zur Fehlersuche anzeigen:
 
 ```powershell
@@ -371,6 +399,26 @@ Zusammenfassung mit Fokusfrage:
 ```powershell
 .\.venv\Scripts\rag-assistant.exe summarize README.md --question "Implementierungsplan" --max-chunks-per-group 4
 ```
+
+Während der Zusammenfassung werden Fortschrittsmeldungen ausgegeben, zum Beispiel Gruppenfortschritt und Dauer des finalen Merge-Schritts. Das ist besonders bei großen PDFs wichtig, weil einzelne LLM-Aufrufe mehrere Minuten dauern können.
+
+### Web-UI-Konfiguration
+
+`Configured Paths` zeigt Pfade mit Status und passenden Aktionen:
+
+- `Not indexed`: keine passende Quelle im Vector Store
+- `Indexed`: eine konfigurierte Einzeldatei ist indexiert
+- `Indexed folder`: alle unterstützten Dateien im Ordner sind indexiert
+- `Partially indexed folder`: nur ein Teil der unterstützten Dateien im Ordner ist indexiert
+- `Contains ... indexed sources`: ein nicht eindeutig prüfbarer Ordner/Pfad enthält indexierte Quellen
+
+Aktionen:
+
+- `Ingest`: nicht indexierten Pfad indexieren
+- `Ingest Missing`: fehlende Quellen in einem teilweise indexierten Ordner nachziehen
+- `Re-ingest Folder`: Ordner erneut indexieren
+- `Delete Index`: indexierte Einzeldatei aus dem Vector Store löschen
+- `Remove Path`: Pfad nur aus der UI-Konfiguration entfernen
 
 ### Retrieval-Evaluation
 
@@ -433,6 +481,8 @@ Wichtige Testbereiche:
 - RAG-Pipeline liefert Antwortobjekt und Quellen
 - Summarizer verarbeitet mehrere Chunk-Gruppen
 - CLI-Formatter erzeugen lesbare Ausgaben
+- Web UI rendert Markdown-Ausgaben sicher
+- Statuslogik der konfigurierten Pfade berücksichtigt Indexzustand
 - Evaluation erkennt passende und fehlende Treffer
 
 Standardtestbefehl:
@@ -475,3 +525,27 @@ Eine stabile erste Version ist erreicht, wenn:
 - UI-Texte vollständig eindeutschen
 - Exportformate für Antworten und Zusammenfassungen erweitern
 - Kleine Beispiel-Dokumentbibliothek für Portfolio-Demos vorbereiten
+- Profil-System für szenariospezifische RAG-Modi planen und einführen
+
+## 17. Geplanter Ausbau: Profile
+
+Das aktuelle RAG-System ist bewusst generisch. Für bessere Qualität in konkreten Szenarien sollen Profile eingeführt werden. Ein Profil definiert, welche Quellen genutzt werden und wie Chunking, Retrieval, Prompting und Antwortformatierung aussehen.
+
+Beispiele:
+
+- `general`: allgemeine Dokumentfragen
+- `technical`: technische Dokumentation, APIs, Installationsschritte
+- `recipes`: Kochbücher, Zutaten, Kategorien und Zubereitung
+- `research`: wissenschaftliche PDFs mit Methoden, Ergebnissen und Limitationen
+- `legal`: vorsichtige, quellennahe Antworten für Verträge oder Regeltexte
+
+Eine Datei darf mehreren Profilen zugeordnet sein. Die Datei wird nicht mehrfach verwaltet; Profilzugehörigkeit wird als Metadatum an Chunks und Quellen geführt.
+
+Geplante Etappen:
+
+1. Default-Profil `general` einführen, ohne bestehendes Verhalten zu brechen.
+2. Profil-Metadaten beim Ingest speichern.
+3. Retrieval optional nach Profil filtern.
+4. Prompt-Stile pro Profil ergänzen.
+5. Web UI um Profil-Dropdowns und Profilverwaltung erweitern.
+6. Bestehende Chunks ohne Profil als `general` behandeln.

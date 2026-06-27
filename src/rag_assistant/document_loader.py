@@ -1,12 +1,59 @@
 """Document loading utilities for local RAG ingestion."""
 
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from pathlib import Path
 import re
+import shutil
+import subprocess
+import tempfile
+from urllib.parse import unquote
+import zipfile
+import xml.etree.ElementTree as ET
 
 from rag_assistant.schema import Document
 
-SUPPORTED_EXTENSIONS = {".md", ".txt", ".pdf"}
+EPUB_EXTENSIONS = {".epub"}
+OPEN_DOCUMENT_EXTENSIONS = {
+    ".odt",
+    ".ods",
+    ".odp",
+    ".odg",
+    ".odf",
+    ".ott",
+    ".ots",
+    ".otp",
+    ".otg",
+    ".sxw",
+    ".sxc",
+    ".sxi",
+    ".sxd",
+    ".stw",
+    ".stc",
+    ".sti",
+    ".std",
+}
+FLAT_OPEN_DOCUMENT_EXTENSIONS = {".fodt", ".fods", ".fodp", ".fodg"}
+SUPPORTED_EXTENSIONS = (
+    {".md", ".txt", ".pdf", ".azw3"}
+    | EPUB_EXTENSIONS
+    | OPEN_DOCUMENT_EXTENSIONS
+    | FLAT_OPEN_DOCUMENT_EXTENSIONS
+)
+HTML_BLOCK_TAGS = {
+    "article",
+    "div",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "li",
+    "p",
+    "section",
+    "tr",
+}
 
 
 class OcrError(RuntimeError):
@@ -64,6 +111,18 @@ def load_document(
     if extension in {".md", ".txt"}:
         return [_load_text_document(file_path)]
 
+    if extension in EPUB_EXTENSIONS:
+        return [_load_epub_document(file_path)]
+
+    if extension in OPEN_DOCUMENT_EXTENSIONS:
+        return [_load_open_document(file_path)]
+
+    if extension in FLAT_OPEN_DOCUMENT_EXTENSIONS:
+        return [_load_flat_open_document(file_path)]
+
+    if extension == ".azw3":
+        return [_load_azw3_document(file_path)]
+
     options = _resolve_ocr_options(use_ocr, ocr_language, ocr_options)
     return _load_pdf_document(file_path, ocr_options=options)
 
@@ -85,6 +144,195 @@ def _load_text_document(path: Path) -> Document:
         file_name=path.name,
         document_type=path.suffix.lower().lstrip("."),
     )
+
+
+def _load_epub_document(path: Path) -> Document:
+    with zipfile.ZipFile(path) as archive:
+        html_paths = _epub_spine_paths(archive) or _epub_html_paths(archive)
+        text_parts = [_html_to_text(_read_zip_text(archive, html_path)) for html_path in html_paths]
+
+    return _document_from_text(path, "\n\n".join(part for part in text_parts if part.strip()))
+
+
+def _epub_spine_paths(archive: zipfile.ZipFile) -> list[str]:
+    try:
+        container = ET.fromstring(archive.read("META-INF/container.xml"))
+    except (KeyError, ET.ParseError):
+        return []
+
+    rootfile = container.find(".//{*}rootfile")
+    if rootfile is None:
+        return []
+
+    opf_path = rootfile.attrib.get("full-path")
+    if not opf_path:
+        return []
+
+    try:
+        package = ET.fromstring(archive.read(opf_path))
+    except (KeyError, ET.ParseError):
+        return []
+
+    manifest: dict[str, str] = {}
+    for item in package.findall(".//{*}manifest/{*}item"):
+        item_id = item.attrib.get("id")
+        href = item.attrib.get("href")
+        media_type = item.attrib.get("media-type", "")
+        if item_id and href and media_type in {"application/xhtml+xml", "text/html"}:
+            manifest[item_id] = _zip_join(opf_path, href)
+
+    paths: list[str] = []
+    for itemref in package.findall(".//{*}spine/{*}itemref"):
+        href = manifest.get(itemref.attrib.get("idref", ""))
+        if href:
+            paths.append(href)
+    return paths
+
+
+def _epub_html_paths(archive: zipfile.ZipFile) -> list[str]:
+    return sorted(
+        name
+        for name in archive.namelist()
+        if name.lower().endswith((".html", ".xhtml", ".htm")) and not name.endswith("/")
+    )
+
+
+def _zip_join(base_file: str, href: str) -> str:
+    base_parts = base_file.split("/")[:-1]
+    href_parts = unquote(href).split("/")
+    parts: list[str] = []
+    for part in base_parts + href_parts:
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(part)
+    return "/".join(parts)
+
+
+def _read_zip_text(archive: zipfile.ZipFile, name: str) -> str:
+    return archive.read(name).decode("utf-8", errors="replace")
+
+
+def _load_open_document(path: Path) -> Document:
+    try:
+        with zipfile.ZipFile(path) as archive:
+            xml_text = _read_zip_text(archive, "content.xml")
+    except KeyError as exc:
+        raise ValueError(f"OpenDocument file has no content.xml: {path}") from exc
+
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError as exc:
+        raise ValueError(f"OpenDocument content.xml is not readable: {path}") from exc
+
+    return _document_from_text(path, _xml_text_to_plain_text(root))
+
+
+def _load_flat_open_document(path: Path) -> Document:
+    try:
+        root = ET.fromstring(path.read_text(encoding="utf-8", errors="replace"))
+    except ET.ParseError as exc:
+        raise ValueError(f"Flat OpenDocument XML is not readable: {path}") from exc
+
+    return _document_from_text(path, _xml_text_to_plain_text(root))
+
+
+def _load_azw3_document(path: Path) -> Document:
+    converter = shutil.which("ebook-convert")
+    if converter is None:
+        raise RuntimeError(
+            "AZW3 loading requires Calibre's 'ebook-convert' command on PATH. "
+            "Install Calibre, then retry the same ingest command."
+        )
+
+    with tempfile.TemporaryDirectory(prefix="rag-azw3-") as temp_dir:
+        output_path = Path(temp_dir) / "book.txt"
+        result = subprocess.run(
+            [converter, str(path), str(output_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            message = (result.stderr or result.stdout or "unknown error").strip()
+            raise RuntimeError(f"AZW3 conversion failed for {path}: {message}")
+        text = output_path.read_text(encoding="utf-8", errors="replace")
+
+    return _document_from_text(path, text)
+
+
+def _document_from_text(path: Path, text: str) -> Document:
+    return Document(
+        text=_normalize_extracted_text(text),
+        source_path=path,
+        file_name=path.name,
+        document_type=path.suffix.lower().lstrip("."),
+    )
+
+
+class _TextExtractingHtmlParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self._skip_depth = 0
+        self.parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag in {"script", "style"}:
+            self._skip_depth += 1
+        if tag == "br" or tag in HTML_BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"script", "style"} and self._skip_depth:
+            self._skip_depth -= 1
+        if tag in HTML_BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if not self._skip_depth:
+            self.parts.append(data)
+
+
+def _html_to_text(html: str) -> str:
+    parser = _TextExtractingHtmlParser()
+    parser.feed(html)
+    return _normalize_extracted_text("".join(parser.parts))
+
+
+def _xml_text_to_plain_text(root: ET.Element) -> str:
+    parts: list[str] = []
+    block_tags = {"p", "h", "list-item", "table-row"}
+    tab_tags = {"tab", "table-cell"}
+    line_break_tags = {"line-break"}
+
+    def collect(element: ET.Element) -> None:
+        local_name = element.tag.rsplit("}", 1)[-1]
+        if element.text:
+            parts.append(element.text)
+        if local_name in tab_tags:
+            parts.append("\t")
+        if local_name in line_break_tags:
+            parts.append("\n")
+        for child in element:
+            collect(child)
+        if element.tail:
+            parts.append(element.tail)
+        if local_name in block_tags:
+            parts.append("\n")
+
+    collect(root)
+    return _normalize_extracted_text("".join(parts))
+
+
+def _normalize_extracted_text(text: str) -> str:
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = re.sub(r"[ \t\f\v]+", " ", normalized)
+    normalized = re.sub(r" *\n *", "\n", normalized)
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+    return normalized.strip()
 
 
 def _load_pdf_document(path: Path, ocr_options: OcrOptions | None = None) -> list[Document]:

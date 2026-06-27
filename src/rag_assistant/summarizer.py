@@ -1,6 +1,7 @@
 """Dedicated document summarization pipeline."""
 
 from collections.abc import Callable
+import time
 
 from rag_assistant.llm_client import LlmClient
 from rag_assistant.schema import SourceReference, SummaryResult, TextChunk
@@ -34,18 +35,33 @@ class DocumentSummarizer:
             )
 
         groups = _group_chunks(ordered_chunks, self.max_chunks_per_group)
+        total_steps = len(groups) + 1
+        started_at = time.monotonic()
         if progress_callback:
-            progress_callback(f"Summarizing {len(ordered_chunks)} chunks in {len(groups)} groups.")
+            progress_callback(
+                f"Summarizing {len(ordered_chunks)} chunks in {len(groups)} groups "
+                f"({total_steps} LLM calls total)."
+            )
 
         partial_summaries = [
-            self._summarize_group(group, index, len(groups), question, progress_callback)
+            self._summarize_group(group, index, len(groups), total_steps, question, progress_callback)
             for index, group in enumerate(groups, start=1)
         ]
         if progress_callback:
-            progress_callback("Merging partial summaries.")
+            progress_callback(
+                f"Progress {_progress_percent(len(groups), total_steps)}%: final merge started "
+                f"({len(partial_summaries)} partial summaries)."
+            )
+        merge_started_at = time.monotonic()
         final_summary = self.llm_client.generate(
             build_final_summary_prompt(partial_summaries, ordered_chunks, question=question)
         )
+        if progress_callback:
+            progress_callback(
+                "Progress 100%: final summary finished "
+                f"in {_format_duration(time.monotonic() - merge_started_at)} "
+                f"(total {_format_duration(time.monotonic() - started_at)})."
+            )
 
         return SummaryResult(
             summary=final_summary,
@@ -60,12 +76,25 @@ class DocumentSummarizer:
         group: list[TextChunk],
         group_index: int,
         group_count: int,
+        total_steps: int,
         question: str | None,
         progress_callback: Callable[[str], None] | None,
     ) -> str:
         if progress_callback:
-            progress_callback(f"Summarizing group {group_index}/{group_count}.")
-        return self.llm_client.generate(build_chunk_summary_prompt(group, question=question))
+            completed_steps = group_index - 1
+            progress_callback(
+                f"Progress {_progress_percent(completed_steps, total_steps)}%: "
+                f"group {group_index}/{group_count} started ({_format_group_scope(group)})."
+            )
+        group_started_at = time.monotonic()
+        summary = self.llm_client.generate(build_chunk_summary_prompt(group, question=question))
+        if progress_callback:
+            progress_callback(
+                f"Progress {_progress_percent(group_index, total_steps)}%: "
+                f"group {group_index}/{group_count} finished in "
+                f"{_format_duration(time.monotonic() - group_started_at)}."
+            )
+        return summary
 
 
 def build_chunk_summary_prompt(chunks: list[TextChunk], question: str | None = None) -> str:
@@ -119,6 +148,46 @@ Final summary:
 
 def _group_chunks(chunks: list[TextChunk], group_size: int) -> list[list[TextChunk]]:
     return [chunks[index : index + group_size] for index in range(0, len(chunks), group_size)]
+
+
+def _progress_percent(completed_steps: int, total_steps: int) -> int:
+    if total_steps <= 0:
+        return 100
+    return round((completed_steps / total_steps) * 100)
+
+
+def _format_duration(seconds: float) -> str:
+    rounded = max(0, round(seconds))
+    minutes, remaining_seconds = divmod(rounded, 60)
+    if minutes:
+        return f"{minutes}m {remaining_seconds}s"
+    return f"{remaining_seconds}s"
+
+
+def _format_group_scope(chunks: list[TextChunk]) -> str:
+    if not chunks:
+        return "0 chunks"
+
+    first = chunks[0]
+    last = chunks[-1]
+    source = first.file_name if first.file_name == last.file_name else "multiple sources"
+    page_range = _format_page_range(first.page_number, last.page_number)
+    chunk_range = (
+        f"chunk {first.chunk_index}"
+        if first.chunk_index == last.chunk_index
+        else f"chunks {first.chunk_index}-{last.chunk_index}"
+    )
+    return f"{len(chunks)} chunks, {source}, {chunk_range}{page_range}"
+
+
+def _format_page_range(first_page: int | None, last_page: int | None) -> str:
+    if first_page is None and last_page is None:
+        return ""
+    if first_page == last_page:
+        return f", page {first_page}"
+    if first_page is None or last_page is None:
+        return ""
+    return f", pages {first_page}-{last_page}"
 
 
 def _format_chunks(chunks: list[TextChunk]) -> str:
