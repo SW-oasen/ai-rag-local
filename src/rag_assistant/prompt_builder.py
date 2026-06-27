@@ -3,10 +3,15 @@
 from rag_assistant.schema import RetrievalResult
 
 
-def build_rag_prompt(question: str, retrieval_results: list[RetrievalResult]) -> str:
+def build_rag_prompt(
+    question: str,
+    retrieval_results: list[RetrievalResult],
+    prompt_style: str = "general",
+) -> str:
     """Build a prompt that asks the LLM to answer from retrieved context."""
 
     context = _format_context(retrieval_results)
+    style_rules = _format_style_rules(prompt_style)
     return f"""You are a local RAG assistant answering questions from provided context.
 
 Rules:
@@ -17,6 +22,7 @@ Rules:
 - Keep the answer concise and technically accurate.
 - Format the answer as Markdown. Use short headings, bullet lists, numbered steps, or tables when they make the answer easier to read.
 - Do not wrap the whole answer in a code block.
+{style_rules}
 
 Context:
 {context}
@@ -43,3 +49,36 @@ def _format_context(retrieval_results: list[RetrievalResult]) -> str:
         blocks.append(f"{label}\n{chunk.text}")
 
     return "\n\n".join(blocks)
+
+
+def _format_style_rules(prompt_style: str) -> str:
+    rules = _style_rules(prompt_style)
+    if not rules:
+        return ""
+    return "\n".join(f"- {rule}" for rule in rules)
+
+
+def _style_rules(prompt_style: str) -> list[str]:
+    normalized_style = prompt_style.strip().lower()
+    if normalized_style == "technical":
+        return [
+            "For technical answers, prefer precise steps, commands, configuration names, and gotchas.",
+            "Separate prerequisites, procedure, verification, and troubleshooting when the context supports it.",
+        ]
+    if normalized_style == "recipes":
+        return [
+            "For recipe or cooking answers, group dishes by category when useful.",
+            "Preserve dish names, ingredients, quantities, cooking methods, and regional names from the context.",
+            "Use nested lists for groups and their dishes or preparation notes.",
+        ]
+    if normalized_style == "research":
+        return [
+            "For research answers, separate objective, method, findings, limitations, and open questions when possible.",
+            "Do not overstate evidence beyond what the context supports.",
+        ]
+    if normalized_style == "legal":
+        return [
+            "For legal or policy answers, stay close to the cited text and avoid legal advice beyond the context.",
+            "Highlight uncertainty, missing clauses, and jurisdiction or date limitations when visible.",
+        ]
+    return []

@@ -15,11 +15,18 @@ class RagPipeline:
         self.retriever = retriever
         self.llm_client = llm_client
 
-    def answer(self, question: str, top_k: int | None = None, source: str | Path | None = None) -> RagAnswer:
+    def answer(
+        self,
+        question: str,
+        top_k: int | None = None,
+        source: str | Path | None = None,
+        profile: str | None = None,
+        prompt_style: str = "general",
+    ) -> RagAnswer:
         """Answer a user question with source references."""
 
-        retrieval_results = self.retriever.retrieve(question, top_k=top_k, source=source)
-        prompt = build_rag_prompt(question, retrieval_results)
+        retrieval_results = self.retriever.retrieve(question, top_k=top_k, source=source, profile=profile)
+        prompt = build_rag_prompt(question, retrieval_results, prompt_style=prompt_style)
         answer_text = self.llm_client.generate(prompt)
 
         return RagAnswer(

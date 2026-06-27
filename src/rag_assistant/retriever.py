@@ -25,7 +25,8 @@ class Retriever:
         query: str,
         top_k: int | None = None,
         source: str | Path | None = None,
+        profile: str | None = None,
     ) -> list[RetrievalResult]:
         """Retrieve source-aware chunks for a user query."""
 
-        return self.vector_store.similarity_search(query, top_k=top_k or self.top_k, source=source)
+        return self.vector_store.similarity_search(query, top_k=top_k or self.top_k, source=source, profile=profile)

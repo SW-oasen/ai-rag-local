@@ -1,6 +1,7 @@
 """Dependency-free local web UI for the RAG assistant."""
 
 from argparse import ArgumentParser, Namespace
+from dataclasses import replace
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -21,9 +22,10 @@ from rag_assistant.document_loader import SUPPORTED_EXTENSIONS, OcrOptions, load
 from rag_assistant.embeddings import OllamaEmbeddingProvider
 from rag_assistant.library_store import CachedSummary, ConfiguredPath, LibraryStore
 from rag_assistant.llm_client import OllamaLlmClient
+from rag_assistant.profile_store import ProfileStore, RagProfile, default_prompt_style
 from rag_assistant.rag_pipeline import RagPipeline
 from rag_assistant.retriever import Retriever
-from rag_assistant.schema import Document, IndexedSource, RagAnswer, RetrievalResult, SummaryResult
+from rag_assistant.schema import Document, IndexedSource, RagAnswer, RetrievalResult, SummaryResult, TextChunk
 from rag_assistant.summarizer import DocumentSummarizer
 from rag_assistant.text_splitter import split_documents
 from rag_assistant.vector_store import ChromaVectorStore
@@ -86,6 +88,7 @@ def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
             route = _normalize_route(parsed.path)
             query = parse_qs(parsed.query)
             sources = self._load_sources_safe()
+            profiles = self._profile_store().list_profiles()
 
             try:
                 if route == "/summary-export":
@@ -107,6 +110,7 @@ def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
                         render_page(
                             active_page="configuration",
                             sources=sources,
+                            profiles=profiles,
                             configured_paths=self._library_store().list_paths(),
                             vector_store_path=args.vector_store,
                             library_store_path=args.library_store,
@@ -114,7 +118,14 @@ def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
                     )
                     return
                 if route == "/ask":
-                    self._send_html(render_page(active_page="ask", sources=sources))
+                    self._send_html(
+                        render_page(
+                            active_page="ask",
+                            sources=sources,
+                            profiles=profiles,
+                            selected_profile=_first(query, "profile").strip() or "general",
+                        )
+                    )
                     return
                 if route == "/extract-text":
                     self._send_html(render_page(active_page="extract-text", sources=sources))
@@ -124,6 +135,7 @@ def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
                         render_page(
                             active_page="overview",
                             sources=sources,
+                            profiles=profiles,
                             configured_paths=self._library_store().list_paths(),
                             vector_store_path=args.vector_store,
                             library_store_path=args.library_store,
@@ -139,6 +151,7 @@ def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
             form = parse_qs(self.rfile.read(length).decode("utf-8"))
             question = _first(form, "question").strip()
             source = _first(form, "source").strip() or None
+            selected_profile = _first(form, "profile").strip() or "general"
             extract_path = _first(form, "extract_path").strip()
             use_ocr = _first(form, "use_ocr") == "on"
             ocr_language = _first(form, "ocr_language").strip() or args.ocr_language
@@ -151,26 +164,32 @@ def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
 
             try:
                 if route == "/retrieve":
-                    results = self._retrieve(question, top_k=top_k, source=source)
+                    profile = self._profile_store().get_profile(selected_profile)
+                    results = self._retrieve(question, top_k=top_k, source=source, profile=profile)
                     self._send_html(
                         render_page(
                             active_page="ask",
                             sources=self._load_sources(),
+                            profiles=self._profile_store().list_profiles(),
                             question=question,
                             selected_source=source,
+                            selected_profile=profile.name,
                             top_k=top_k,
                             retrieval_results=results,
                         )
                     )
                     return
                 if route == "/ask":
-                    answer = self._answer(question, top_k=top_k, source=source)
+                    profile = self._profile_store().get_profile(selected_profile)
+                    answer = self._answer(question, top_k=top_k, source=source, profile=profile)
                     self._send_html(
                         render_page(
                             active_page="ask",
                             sources=self._load_sources(),
+                            profiles=self._profile_store().list_profiles(),
                             question=question,
                             selected_source=source,
+                            selected_profile=profile.name,
                             top_k=top_k,
                             answer=answer,
                         )
@@ -226,6 +245,37 @@ def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
                 if route == "/configuration/remove-path":
                     self._library_store().remove_path(_first(form, "document_path").strip())
                     self._send_configuration(message="Document path removed.")
+                    return
+                if route == "/configuration/add-profile":
+                    profile_name = _first(form, "profile_name").strip()
+                    prompt_style = _first(form, "prompt_style").strip() or default_prompt_style(profile_name)
+                    self._profile_store().save_profile(
+                        RagProfile(
+                            name=profile_name,
+                            description=f"{profile_name} RAG profile.",
+                            prompt_style=prompt_style,
+                        )
+                    )
+                    self._send_configuration(message=f"Profile '{profile_name}' saved.")
+                    return
+                if route == "/configuration/add-profile-path":
+                    profile = self._profile_store().add_path(
+                        _first(form, "profile_name").strip(),
+                        _first(form, "profile_path").strip(),
+                    )
+                    self._send_configuration(message=f"Path added to profile '{profile.name}'.")
+                    return
+                if route == "/configuration/remove-profile-path":
+                    profile = self._profile_store().remove_path(
+                        _first(form, "profile_name").strip(),
+                        _first(form, "profile_path").strip(),
+                    )
+                    self._send_configuration(message=f"Path removed from profile '{profile.name}'.")
+                    return
+                if route == "/configuration/ingest-profile-path":
+                    profile = self._profile_store().get_profile(_first(form, "profile_name").strip())
+                    progress = self._ingest_path(_first(form, "profile_path").strip(), profile=profile)
+                    self._send_configuration(progress=progress)
                     return
                 if route == "/configuration/ingest-path":
                     progress = self._ingest_path(_first(form, "document_path").strip())
@@ -288,6 +338,9 @@ def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
         def _library_store(self) -> LibraryStore:
             return LibraryStore(args.library_store)
 
+        def _profile_store(self) -> ProfileStore:
+            return ProfileStore()
+
         def _load_sources(self) -> list[IndexedSource]:
             return self._vector_store().list_sources()
 
@@ -297,12 +350,27 @@ def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
             except Exception:
                 return []
 
-        def _retrieve(self, question: str, top_k: int, source: str | None) -> list[RetrievalResult]:
+        def _load_profile_sources_safe(self, profiles: list[RagProfile]) -> dict[str, list[IndexedSource]]:
+            profile_sources: dict[str, list[IndexedSource]] = {}
+            for profile in profiles:
+                try:
+                    profile_sources[profile.name] = self._vector_store().list_sources(profile=profile.name)
+                except Exception:
+                    profile_sources[profile.name] = []
+            return profile_sources
+
+        def _retrieve(
+            self,
+            question: str,
+            top_k: int,
+            source: str | None,
+            profile: RagProfile,
+        ) -> list[RetrievalResult]:
             if not question:
                 return []
-            return self._retriever().retrieve(question, top_k=top_k, source=source)
+            return self._retriever().retrieve(question, top_k=top_k, source=source, profile=profile.name)
 
-        def _answer(self, question: str, top_k: int, source: str | None) -> RagAnswer | None:
+        def _answer(self, question: str, top_k: int, source: str | None, profile: RagProfile) -> RagAnswer | None:
             if not question:
                 return None
             llm_client = OllamaLlmClient(
@@ -314,6 +382,8 @@ def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
                 question,
                 top_k=top_k,
                 source=source,
+                profile=profile.name,
+                prompt_style=profile.prompt_style,
             )
 
         def _summarize(self, source: str | None, progress: list[str] | None = None) -> SummaryResult:
@@ -332,20 +402,27 @@ def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
                 raise ValueError("Enter a local file or folder path before extracting text.")
             return load_documents(path, ocr_options=ocr_options)
 
-        def _ingest_path(self, path: str) -> list[str]:
+        def _ingest_path(self, path: str, profile: RagProfile | None = None) -> list[str]:
             if not path:
                 raise ValueError("Enter a local file or folder path before ingestion.")
-            progress = [f"Loading documents from {path}."]
+            resolved_profile = profile or self._profile_store().get_profile("general")
+            chunk_size = resolved_profile.chunk_size if profile else args.chunk_size
+            chunk_overlap = resolved_profile.chunk_overlap if profile else args.chunk_overlap
+            progress = [f"Loading documents from {path} for profile '{resolved_profile.name}'."]
             documents = load_documents(path)
             progress.append(f"Loaded {len(documents)} document item{'s' if len(documents) != 1 else ''}.")
             chunks = split_documents(
                 documents,
-                chunk_size=args.chunk_size,
-                chunk_overlap=args.chunk_overlap,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
             )
+            chunks = _with_profile_metadata(chunks, resolved_profile)
             progress.append(f"Created {len(chunks)} chunk{'s' if len(chunks) != 1 else ''}.")
             self._vector_store().add_chunks(chunks)
-            progress.append(f"Stored {len(chunks)} chunk{'s' if len(chunks) != 1 else ''} in the vector DB.")
+            progress.append(
+                f"Stored {len(chunks)} chunk{'s' if len(chunks) != 1 else ''} "
+                f"in the vector DB for profile '{resolved_profile.name}'."
+            )
             return progress
 
         def _cache_summary(self, summary: SummaryResult) -> CachedSummary:
@@ -381,10 +458,13 @@ def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
             message: str | None = None,
             progress: list[str] | None = None,
         ) -> None:
+            profiles = self._profile_store().list_profiles()
             self._send_html(
                 render_page(
                     active_page="configuration",
                     sources=self._load_sources_safe(),
+                    profiles=profiles,
+                    profile_sources=self._load_profile_sources_safe(profiles),
                     selected_source=selected_source,
                     configured_paths=self._library_store().list_paths(),
                     vector_store_path=args.vector_store,
@@ -422,8 +502,11 @@ def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
 def render_page(
     active_page: str = "overview",
     sources: list[IndexedSource] | None = None,
+    profiles: list[RagProfile] | None = None,
+    profile_sources: dict[str, list[IndexedSource]] | None = None,
     question: str = "",
     selected_source: str | None = None,
+    selected_profile: str = "general",
     top_k: int = DEFAULT_TOP_K,
     retrieval_results: list[RetrievalResult] | None = None,
     answer: RagAnswer | None = None,
@@ -442,13 +525,18 @@ def render_page(
     """Render the local UI shell and selected page."""
 
     sources = sources or []
+    profiles = profiles or []
+    profile_sources = profile_sources or {}
     configured_paths = configured_paths or []
     progress_messages = progress_messages or []
     page_content = render_page_content(
         active_page=active_page,
         sources=sources,
+        profiles=profiles,
+        profile_sources=profile_sources,
         question=question,
         selected_source=selected_source,
+        selected_profile=selected_profile,
         top_k=top_k,
         retrieval_results=retrieval_results,
         answer=answer,
@@ -490,8 +578,11 @@ def render_page(
 def render_page_content(
     active_page: str,
     sources: list[IndexedSource],
+    profiles: list[RagProfile],
+    profile_sources: dict[str, list[IndexedSource]],
     question: str,
     selected_source: str | None,
+    selected_profile: str,
     top_k: int,
     retrieval_results: list[RetrievalResult] | None,
     answer: RagAnswer | None,
@@ -506,7 +597,7 @@ def render_page_content(
 ) -> str:
     if active_page == "ask":
         return (
-            render_query_form(sources, question, selected_source, top_k)
+            render_query_form(sources, profiles, question, selected_source, selected_profile, top_k)
             + render_answer(answer)
             + render_retrieval_results(retrieval_results)
         )
@@ -517,6 +608,8 @@ def render_page_content(
     if active_page == "configuration":
         return render_configuration_page(
             sources=sources,
+            profiles=profiles,
+            profile_sources=profile_sources,
             configured_paths=configured_paths,
             selected_source=selected_source,
             vector_store_path=vector_store_path,
@@ -619,6 +712,8 @@ def render_summary_page(
 
 def render_configuration_page(
     sources: list[IndexedSource],
+    profiles: list[RagProfile],
+    profile_sources: dict[str, list[IndexedSource]],
     configured_paths: list[ConfiguredPath],
     selected_source: str | None,
     vector_store_path: Path | None,
@@ -683,6 +778,7 @@ def render_configuration_page(
       <h2>Configured Paths</h2>
       {paths_table}
     </section>
+    {render_profiles_configuration(profiles, profile_sources)}
     <section class="query">
       <form method="post" action="/configuration/summarize-source">
         {render_source_selector(sources, selected_source, label="Summary Cache", required=True)}
@@ -712,6 +808,103 @@ def render_configuration_page(
         <dt>Library store</dt><dd>{escape(_display_path(library_store_path))}</dd>
       </dl>
     </section>"""
+
+
+def render_profiles_configuration(
+    profiles: list[RagProfile],
+    profile_sources: dict[str, list[IndexedSource]] | None = None,
+) -> str:
+    profile_sources = profile_sources or {}
+    rows = []
+    for profile in profiles:
+        sources = profile_sources.get(profile.name, [])
+        path_items = "".join(
+            _render_profile_path_item(profile, path, sources)
+            for path in profile.paths
+        )
+        paths = f"<ul class=\"inline-list\">{path_items}</ul>" if path_items else "<span class=\"meta\">all/manual</span>"
+        rows.append(
+            "<tr>"
+            f"<td>{escape(profile.name)}</td>"
+            f"<td>{escape(profile.prompt_style)}</td>"
+            f"<td>{profile.chunk_size}/{profile.chunk_overlap}</td>"
+            f"<td>{paths}</td>"
+            "</tr>"
+        )
+    profile_options = "".join(
+        f'<option value="{escape(profile.name)}">{escape(profile.name)}</option>'
+        for profile in profiles
+    )
+    rows_html = "".join(rows) if rows else '<tr><td colspan="4">No profiles configured.</td></tr>'
+    return f"""
+    <section>
+      <h2>Profiles</h2>
+      <table>
+        <thead><tr><th>Name</th><th>Prompt Style</th><th>Chunk</th><th>Paths</th></tr></thead>
+        <tbody>{rows_html}</tbody>
+      </table>
+    </section>
+    <section class="query">
+      <form method="post" action="/configuration/add-profile">
+        <div class="controls profile-controls">
+          <label>
+            Profile Name
+            <input name="profile_name" placeholder="technical">
+          </label>
+          <label>
+            Prompt Style
+            <select name="prompt_style">
+              <option value="general">general</option>
+              <option value="technical">technical</option>
+              <option value="recipes">recipes</option>
+              <option value="research">research</option>
+              <option value="legal">legal</option>
+            </select>
+          </label>
+        </div>
+        <div class="actions">
+          <button type="submit">Add Profile</button>
+        </div>
+      </form>
+      <form method="post" action="/configuration/add-profile-path">
+        <div class="controls profile-path-controls">
+          <label>
+            Profile
+            <select name="profile_name">{profile_options}</select>
+          </label>
+          <label>
+            Profile Path
+            <input name="profile_path" placeholder="data/raw/local-docus/tech">
+          </label>
+        </div>
+        <div class="actions">
+          <button type="submit">Add Profile Path</button>
+        </div>
+      </form>
+    </section>"""
+
+
+def _render_profile_path_item(profile: RagProfile, path: str, sources: list[IndexedSource]) -> str:
+    matched_sources = _sources_for_configured_path(path, sources)
+    exact_source = _exact_source_for_configured_path(path, sources)
+    status = _configured_path_status(path, matched_sources, exact_source)
+    ingest_label = _configured_path_ingest_label(path, matched_sources)
+    return (
+        "<li>"
+        f'<span class="path-name">{escape(path)}</span>'
+        f'<span class="meta">{escape(status)}</span>'
+        '<form method="post" action="/configuration/ingest-profile-path">'
+        f'<input type="hidden" name="profile_name" value="{escape(profile.name)}">'
+        f'<input type="hidden" name="profile_path" value="{escape(path)}">'
+        f'<button class="small-button" type="submit">{escape(ingest_label)}</button>'
+        "</form>"
+        '<form method="post" action="/configuration/remove-profile-path">'
+        f'<input type="hidden" name="profile_name" value="{escape(profile.name)}">'
+        f'<input type="hidden" name="profile_path" value="{escape(path)}">'
+        '<button class="secondary small-button" type="submit">Remove</button>'
+        "</form>"
+        "</li>"
+    )
 
 
 def _configured_path_status(
@@ -747,6 +940,16 @@ def _configured_path_ingest_label(path: str, matched_sources: list[IndexedSource
         if matched_sources:
             return "Ingest Missing"
     return "Ingest Updates" if matched_sources else "Ingest"
+
+
+def _with_profile_metadata(chunks: list[TextChunk], profile: RagProfile) -> list[TextChunk]:
+    profiled_chunks: list[TextChunk] = []
+    for chunk in chunks:
+        metadata = chunk.metadata.copy()
+        metadata["profile"] = profile.name
+        metadata["prompt_style"] = profile.prompt_style
+        profiled_chunks.append(replace(chunk, metadata=metadata))
+    return profiled_chunks
 
 
 def _exact_source_for_configured_path(path: str, sources: list[IndexedSource]) -> IndexedSource | None:
@@ -832,10 +1035,30 @@ def render_source_selector(
         </label>"""
 
 
+def render_profile_selector(
+    profiles: list[RagProfile],
+    selected_profile: str,
+) -> str:
+    if not profiles:
+        profiles = [RagProfile(name="general", description="General-purpose RAG profile.")]
+    options = []
+    for profile in profiles:
+        selected = " selected" if profile.name == selected_profile else ""
+        label = profile.name if profile.prompt_style == profile.name else f"{profile.name} ({profile.prompt_style})"
+        options.append(f'<option value="{escape(profile.name)}"{selected}>{escape(label)}</option>')
+    return f"""
+        <label>
+          Profile
+          <select name="profile">{''.join(options)}</select>
+        </label>"""
+
+
 def render_query_form(
     sources: list[IndexedSource],
+    profiles: list[RagProfile],
     question: str,
     selected_source: str | None,
+    selected_profile: str,
     top_k: int,
 ) -> str:
     return f"""
@@ -847,6 +1070,7 @@ def render_query_form(
         </label>
         <div class="controls">
           {render_source_selector(sources, selected_source)}
+          {render_profile_selector(profiles, selected_profile)}
           <label>
             Top K
             <input class="small" name="top_k" type="number" min="1" max="20" value="{top_k}">
@@ -1356,13 +1580,15 @@ section { margin-top: 22px; }
 label { display: grid; gap: 6px; font-size: 13px; font-weight: 700; }
 input, select { box-sizing: border-box; width: 100%; border: 1px solid #b9bbb5; padding: 10px; font: inherit; background: #ffffff; }
 input.small { max-width: 110px; }
-.controls { display: grid; grid-template-columns: minmax(220px, 1fr) 120px; gap: 14px; margin-top: 14px; }
+.controls { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(180px, 0.6fr) 120px; gap: 14px; margin-top: 14px; }
 .ocr-controls { grid-template-columns: minmax(220px, 1fr) 120px 120px; }
+.profile-controls, .profile-path-controls { grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr); }
 .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
 .actions.compact { margin-top: 10px; }
 button { border: 1px solid #202124; background: #202124; color: #ffffff; padding: 10px 14px; font: inherit; cursor: pointer; }
 button.secondary, .button.secondary { background: #ffffff; color: #202124; }
 button.danger { border-color: #8a2d25; background: #8a2d25; color: #ffffff; }
+button.small-button { padding: 4px 8px; font-size: 12px; }
 .checkbox { display: flex; align-items: center; gap: 8px; font-weight: 700; }
 .checkbox input { width: auto; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #fafafa; border: 1px solid #e7e7e2; padding: 12px; max-height: 420px; overflow: auto; }
@@ -1377,6 +1603,10 @@ article { background: #ffffff; border: 1px solid #d5dbe3; padding: 14px; margin-
 .details dd { margin: 0; overflow-wrap: anywhere; }
 .row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .row-actions form { margin: 0; }
+.inline-list { margin: 0; padding-left: 18px; }
+.inline-list li { margin: 4px 0; }
+.inline-list form { display: inline; margin-left: 8px; }
+.path-name { margin-right: 8px; overflow-wrap: anywhere; }
 .summary-text, .markdown-text { background: #ffffff; border: 1px solid #d5dbe3; padding: 16px; }
 .summary-text > :first-child, .markdown-text > :first-child { margin-top: 0; }
 .summary-text > :last-child, .markdown-text > :last-child { margin-bottom: 0; }

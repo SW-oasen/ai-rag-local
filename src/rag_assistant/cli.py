@@ -1,6 +1,7 @@
 """Command-line interface for local RAG ingestion and question answering."""
 
 from argparse import ArgumentParser, Namespace
+from dataclasses import replace
 import json
 from pathlib import Path
 import sys
@@ -12,6 +13,7 @@ from rag_assistant.config import (
     DEFAULT_EMBEDDING_BATCH_SIZE,
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_LLM_MODEL,
+    DEFAULT_PROFILE,
     DEFAULT_TOP_K,
     VECTOR_STORE_DIR,
 )
@@ -25,6 +27,7 @@ from rag_assistant.evaluation import (
     load_retrieval_examples,
 )
 from rag_assistant.llm_client import OllamaLlmClient
+from rag_assistant.profile_store import ProfileStore, RagProfile
 from rag_assistant.rag_pipeline import RagPipeline
 from rag_assistant.retriever import Retriever
 from rag_assistant.schema import IndexedSource, RagAnswer, RetrievalResult, TextChunk
@@ -55,6 +58,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     except RetrievalEvaluationError as exc:
         print(f"Evaluation error: {exc}")
         return 4
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        return 1
 
 
 def build_parser() -> ArgumentParser:
@@ -90,6 +96,7 @@ def build_parser() -> ArgumentParser:
     )
     ingest.add_argument("--no-ocr-preprocess", action="store_true", help="Disable OCR image preprocessing.")
     ingest.add_argument("--no-ocr-clean", action="store_true", help="Disable OCR text cleanup.")
+    _add_profile_arg(ingest)
     ingest.set_defaults(handler=_handle_ingest)
 
     retrieve = subparsers.add_parser("retrieve", help="Retrieve relevant chunks for a question.")
@@ -97,6 +104,7 @@ def build_parser() -> ArgumentParser:
     _add_storage_args(retrieve)
     retrieve.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
     retrieve.add_argument("--source", type=Path, default=None, help="Limit retrieval to one indexed source path/file name.")
+    _add_profile_arg(retrieve)
     retrieve.set_defaults(handler=_handle_retrieve)
 
     sources = subparsers.add_parser("sources", help="List documents stored in the vector index.")
@@ -128,7 +136,11 @@ def build_parser() -> ArgumentParser:
     ask.add_argument("--temperature", type=float, default=0.1)
     ask.add_argument("--show-prompt", action="store_true")
     ask.add_argument("--source", type=Path, default=None, help="Limit retrieval to one indexed source path/file name.")
+    _add_profile_arg(ask)
     ask.set_defaults(handler=_handle_ask)
+
+    profiles = subparsers.add_parser("profiles", help="List configured RAG profiles.")
+    profiles.set_defaults(handler=_handle_profiles)
 
     summarize = subparsers.add_parser("summarize", help="Summarize a full document without top-k retrieval.")
     summarize.add_argument("source", type=Path, help="File to load directly, or indexed source path/file name.")
@@ -170,18 +182,25 @@ def _add_storage_args(parser: ArgumentParser) -> None:
     parser.add_argument("--ollama-host", default=None)
 
 
+def _add_profile_arg(parser: ArgumentParser) -> None:
+    parser.add_argument("--profile", default=DEFAULT_PROFILE, help="RAG profile to use.")
+
+
 def _handle_ingest(args: Namespace) -> int:
+    profile = _profile_from_args(args, create=True)
     documents = load_documents(args.path, ocr_options=_ocr_options_from_args(args))
     chunks = split_documents(
         documents,
-        chunk_size=args.chunk_size,
-        chunk_overlap=args.chunk_overlap,
+        chunk_size=args.chunk_size if args.chunk_size != DEFAULT_CHUNK_SIZE else profile.chunk_size,
+        chunk_overlap=args.chunk_overlap if args.chunk_overlap != DEFAULT_CHUNK_OVERLAP else profile.chunk_overlap,
     )
+    chunks = _with_profile_metadata(chunks, profile)
     vector_store = _create_vector_store(args)
     vector_store.add_chunks(chunks)
 
     print(f"Ingested documents: {len(documents)}")
     print(f"Stored chunks: {len(chunks)}")
+    print(f"Profile: {profile.name}")
     print(f"Vector store: {args.vector_store}")
     print(f"Collection size: {vector_store.count()}")
     return 0
@@ -199,8 +218,9 @@ def _ocr_options_from_args(args: Namespace) -> OcrOptions:
 
 
 def _handle_retrieve(args: Namespace) -> int:
+    profile = _profile_from_args(args)
     retriever = _create_retriever(args)
-    results = retriever.retrieve(args.question, top_k=args.top_k, source=args.source)
+    results = retriever.retrieve(args.question, top_k=args.top_k, source=args.source, profile=profile.name)
     print(format_retrieval_results(results))
     return 0
 
@@ -233,6 +253,7 @@ def _handle_chunks(args: Namespace) -> int:
 
 
 def _handle_ask(args: Namespace) -> int:
+    profile = _profile_from_args(args)
     retriever = _create_retriever(args)
     llm_client = OllamaLlmClient(
         model=args.llm_model,
@@ -243,8 +264,15 @@ def _handle_ask(args: Namespace) -> int:
         args.question,
         top_k=args.top_k,
         source=args.source,
+        profile=profile.name,
+        prompt_style=profile.prompt_style,
     )
     print(format_rag_answer(answer, show_prompt=args.show_prompt))
+    return 0
+
+
+def _handle_profiles(args: Namespace) -> int:
+    print(format_profiles(ProfileStore().list_profiles()))
     return 0
 
 
@@ -301,6 +329,24 @@ def _create_vector_store(args: Namespace) -> ChromaVectorStore:
     )
 
 
+def _profile_from_args(args: Namespace, create: bool = False) -> RagProfile:
+    store = ProfileStore()
+    profile_name = getattr(args, "profile", DEFAULT_PROFILE)
+    if create:
+        return store.ensure_profile(profile_name)
+    return store.get_profile(profile_name)
+
+
+def _with_profile_metadata(chunks: list[TextChunk], profile: RagProfile) -> list[TextChunk]:
+    profiled_chunks: list[TextChunk] = []
+    for chunk in chunks:
+        metadata = chunk.metadata.copy()
+        metadata["profile"] = profile.name
+        metadata["prompt_style"] = profile.prompt_style
+        profiled_chunks.append(replace(chunk, metadata=metadata))
+    return profiled_chunks
+
+
 def format_retrieval_results(results: list[RetrievalResult]) -> str:
     """Format retrieval results for terminal output."""
 
@@ -340,6 +386,25 @@ def format_indexed_sources(sources: list[IndexedSource], total_chunks: int) -> s
             f"[{index}] {source.file_name} | {source.document_type} | chunks {source.chunk_count}{pages}"
         )
         lines.append(f"Path: {source.source_path}")
+    return "\n".join(lines)
+
+
+def format_profiles(profiles: list[RagProfile]) -> str:
+    """Format profile summaries for terminal output."""
+
+    lines = [f"Profiles: {len(profiles)}"]
+    if not profiles:
+        lines.append("No profiles configured.")
+        return "\n".join(lines)
+
+    lines.append("")
+    for profile in profiles:
+        paths = ", ".join(profile.paths) if profile.paths else "all/manual"
+        description = f" | {profile.description}" if profile.description else ""
+        lines.append(
+            f"- {profile.name} | style {profile.prompt_style} | "
+            f"chunk {profile.chunk_size}/{profile.chunk_overlap} | paths {paths}{description}"
+        )
     return "\n".join(lines)
 
 

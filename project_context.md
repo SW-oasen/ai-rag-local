@@ -59,7 +59,7 @@ Vorhanden:
 - Fortschrittsmeldungen für dokumentweite Zusammenfassungen
 - Markdown-Rendering in der Web UI für Antworten und Zusammenfassungen
 - Retrieval-Evaluation über Markdown-Beispieldateien
-- CLI mit `ingest`, `sources`, `delete-source`, `reset-index`, `chunks`, `retrieve`, `ask`, `summarize` und `eval`
+- CLI mit `ingest`, `sources`, `delete-source`, `reset-index`, `chunks`, `retrieve`, `ask`, `summarize`, `profiles` und `eval`
 - Lokale Browser-UI mit `Overview`, `Ask`, `Summarize`, `Extract Text` und `Configuration`
 - Indexverwaltung zum Löschen einzelner Quellen und Zurücksetzen des Vector Store
 - Statusbasierte `Configured Paths` in der Web UI
@@ -175,6 +175,7 @@ Die CLI und Web UI können dabei Fortschrittsmeldungen ausgeben:
 - `summarizer.py`: dokumentweite Map-Reduce-Zusammenfassung
 - `evaluation.py`: Retrieval-Evaluation über Beispieltabellen
 - `library_store.py`: lokale UI-Konfiguration und gecachte Zusammenfassungen
+- `profile_store.py`: JSON-basierte RAG-Profile mit `general`-Default
 - `cli.py`: Kommandozeilenoberfläche
 - `web_app.py`: lokale HTTP-Browseroberfläche
 - `schema.py`: zentrale Datenobjekte
@@ -280,10 +281,22 @@ http://127.0.0.1:8765
 
 ### Dokumente indexieren
 
+Profile anzeigen:
+
+```powershell
+.\.venv\Scripts\rag-assistant.exe profiles
+```
+
 Ordner indexieren:
 
 ```powershell
 .\.venv\Scripts\rag-assistant.exe ingest data/raw
+```
+
+Ordner mit Profil indexieren:
+
+```powershell
+.\.venv\Scripts\rag-assistant.exe ingest data/raw/local-docus/tech --profile technical
 ```
 
 Ordner mit kleinerem Embedding-Batch indexieren:
@@ -354,6 +367,12 @@ Semantische Suche ohne LLM-Antwort:
 .\.venv\Scripts\rag-assistant.exe retrieve "Welche Methoden werden beschrieben?" --top-k 5
 ```
 
+Semantische Suche innerhalb eines Profils:
+
+```powershell
+.\.venv\Scripts\rag-assistant.exe retrieve "Welche Methoden werden beschrieben?" --profile technical --top-k 5
+```
+
 Suche auf eine Quelle begrenzen:
 
 ```powershell
@@ -364,6 +383,12 @@ Frage mit lokaler Antwortgenerierung:
 
 ```powershell
 .\.venv\Scripts\rag-assistant.exe ask "Fasse die Dokumente zusammen." --llm-model qwen3:8b
+```
+
+Frage mit Profilfilter:
+
+```powershell
+.\.venv\Scripts\rag-assistant.exe ask "Wie nutze ich die API?" --profile technical --llm-model qwen3:8b
 ```
 
 Die Antwort wird als Markdown angefordert. In der Web UI wird ein sicherer Markdown-Subset formatiert dargestellt; in der CLI bleibt die Markdown-Ausgabe als Text sichtbar.
@@ -527,9 +552,9 @@ Eine stabile erste Version ist erreicht, wenn:
 - Kleine Beispiel-Dokumentbibliothek für Portfolio-Demos vorbereiten
 - Profil-System für szenariospezifische RAG-Modi planen und einführen
 
-## 17. Geplanter Ausbau: Profile
+## 17. Profile
 
-Das aktuelle RAG-System ist bewusst generisch. Für bessere Qualität in konkreten Szenarien sollen Profile eingeführt werden. Ein Profil definiert, welche Quellen genutzt werden und wie Chunking, Retrieval, Prompting und Antwortformatierung aussehen.
+Das aktuelle RAG-System ist bewusst generisch. Für bessere Qualität in konkreten Szenarien werden Profile eingeführt. Ein Profil definiert, welche Quellen genutzt werden und wie Chunking, Retrieval, Prompting und Antwortformatierung aussehen.
 
 Beispiele:
 
@@ -539,13 +564,27 @@ Beispiele:
 - `research`: wissenschaftliche PDFs mit Methoden, Ergebnissen und Limitationen
 - `legal`: vorsichtige, quellennahe Antworten für Verträge oder Regeltexte
 
-Eine Datei darf mehreren Profilen zugeordnet sein. Die Datei wird nicht mehrfach verwaltet; Profilzugehörigkeit wird als Metadatum an Chunks und Quellen geführt.
+Eine Datei darf mehreren Profilen zugeordnet sein. Die Profilzugehörigkeit wird als Metadatum an Chunks geführt. Für Nicht-`general`-Profile wird das Profil in die Chunk-ID einbezogen, damit dieselbe Quelle parallel in mehreren Profilen indexiert werden kann.
 
-Geplante Etappen:
+Bereits umgesetzt:
 
-1. Default-Profil `general` einführen, ohne bestehendes Verhalten zu brechen.
-2. Profil-Metadaten beim Ingest speichern.
-3. Retrieval optional nach Profil filtern.
-4. Prompt-Stile pro Profil ergänzen.
-5. Web UI um Profil-Dropdowns und Profilverwaltung erweitern.
-6. Bestehende Chunks ohne Profil als `general` behandeln.
+- `ProfileStore` mit JSON-Speicherung unter `data/processed/profiles.json`
+- Default-Profil `general`
+- automatisches Anlegen neuer Profile bei `ingest --profile <name>`
+- CLI-Befehl `profiles`
+- `--profile` für `ingest`, `retrieve` und `ask`
+- Profil-Metadaten beim Ingest
+- Profilfilter im semantischen Retrieval
+- Prompt-Stile für `general`, `technical`, `recipes`, `research` und `legal`
+- automatische Prompt-Stil-Auswahl für neue Profile mit bekannten Namen
+- Profil-Dropdown im Web-UI-Bereich `Ask`
+- Web-UI `Retrieve` und `Ask` nutzen Profilfilter und passenden Prompt-Stil
+- Profilverwaltung in der Web UI unter `Configuration`
+- Pfade pro Profil in der Web UI hinzufügen und entfernen
+- Profilpfade aus der Web UI direkt mit Profilmetadaten indexieren
+- bestehende Chunks ohne Profil-Metadatum werden beim Retrieval als `general` behandelt
+- Profilpfade zeigen in der Web UI ihren Indexstatus pro Profil
+
+Nächste Etappen:
+
+1. Profil-UX nach praktischer Nutzung weiter glätten, zum Beispiel Profilbeschreibung und Chunk-Parameter direkt editierbar machen.

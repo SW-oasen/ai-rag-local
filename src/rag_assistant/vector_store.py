@@ -4,6 +4,7 @@ from hashlib import sha1
 from pathlib import Path
 from typing import Any
 
+from rag_assistant.config import DEFAULT_PROFILE
 from rag_assistant.embeddings import EmbeddingProvider
 from rag_assistant.schema import IndexedSource, RetrievalResult, TextChunk
 
@@ -61,18 +62,27 @@ class ChromaVectorStore:
         except Exception as exc:
             raise VectorStoreError("Could not write chunks to the Chroma vector store.") from exc
 
-    def similarity_search(self, query: str, top_k: int = 4, source: str | Path | None = None) -> list[RetrievalResult]:
+    def similarity_search(
+        self,
+        query: str,
+        top_k: int = 4,
+        source: str | Path | None = None,
+        profile: str | None = None,
+    ) -> list[RetrievalResult]:
         """Return the most relevant chunks for a query."""
 
         if top_k <= 0:
             raise ValueError("top_k must be greater than zero")
 
         try:
+            collection_count = self.collection.count()
+            if collection_count == 0:
+                return []
             query_embedding = self.embedding_provider.embed_query(query)
-            source_filter = self._build_source_filter(source)
+            source_filter = self._build_source_filter(source, profile=profile)
             result = self.collection.query(
                 query_embeddings=[query_embedding],
-                n_results=top_k,
+                n_results=_query_result_count(top_k, collection_count, profile),
                 where=source_filter,
                 include=["documents", "metadatas", "distances"],
             )
@@ -85,8 +95,12 @@ class ChromaVectorStore:
 
         results: list[RetrievalResult] = []
         for document_text, metadata, distance in zip(documents, metadatas, distances):
+            if not _metadata_matches_profile(metadata, profile):
+                continue
             chunk = _metadata_to_chunk(document_text, metadata)
             results.append(RetrievalResult(chunk=chunk, score=distance))
+            if len(results) >= top_k:
+                break
 
         return results
 
@@ -142,7 +156,7 @@ class ChromaVectorStore:
         ]
         return sorted(chunks, key=lambda chunk: (str(chunk.source_path), chunk.page_number or 0, chunk.chunk_index))
 
-    def list_sources(self) -> list[IndexedSource]:
+    def list_sources(self, profile: str | None = None) -> list[IndexedSource]:
         """Return document-level summaries for indexed sources."""
 
         try:
@@ -152,6 +166,8 @@ class ChromaVectorStore:
 
         grouped: dict[str, dict[str, Any]] = {}
         for metadata in result.get("metadatas", []):
+            if profile is not None and not _metadata_matches_profile(metadata, profile):
+                continue
             source_path = str(metadata["source_path"])
             source = grouped.setdefault(
                 source_path,
@@ -179,22 +195,29 @@ class ChromaVectorStore:
         ]
         return sorted(sources, key=lambda source: (source.file_name.lower(), str(source.source_path)))
 
-    def _build_source_filter(self, source: str | Path | None) -> dict[str, str] | None:
+    def _build_source_filter(
+        self,
+        source: str | Path | None,
+        profile: str | None = None,
+    ) -> dict[str, str] | None:
+        profile_filter = _profile_filter(profile)
         if source is None:
-            return None
+            return profile_filter
 
         source_text = str(source)
         matches = [indexed_source for indexed_source in self.list_sources() if _source_matches_indexed(indexed_source, source_text)]
         if not matches:
-            return {"file_name": source_text}
+            return _combine_filters({"file_name": source_text}, profile_filter)
         if len(matches) > 1:
             matched_paths = ", ".join(str(match.source_path) for match in matches)
             raise VectorStoreError(f"Source filter '{source_text}' matched multiple indexed sources: {matched_paths}")
-        return {"source_path": str(matches[0].source_path)}
+        return _combine_filters({"source_path": str(matches[0].source_path)}, profile_filter)
 
 
 def _chunk_id(chunk: TextChunk) -> str:
-    raw_id = f"{chunk.source_path}:{chunk.page_number}:{chunk.chunk_index}:{chunk.start_char}:{chunk.end_char}"
+    profile = str(chunk.metadata.get("profile", DEFAULT_PROFILE))
+    profile_part = "" if profile == DEFAULT_PROFILE else f":profile:{profile}"
+    raw_id = f"{chunk.source_path}:{chunk.page_number}:{chunk.chunk_index}:{chunk.start_char}:{chunk.end_char}{profile_part}"
     return sha1(raw_id.encode("utf-8")).hexdigest()
 
 
@@ -223,6 +246,7 @@ def _metadata_to_chunk(text: str, metadata: dict[str, Any]) -> TextChunk:
         for key, value in metadata.items()
         if key.startswith("extra_")
     }
+    extra_metadata.setdefault("profile", DEFAULT_PROFILE)
 
     return TextChunk(
         text=text,
@@ -246,3 +270,27 @@ def _source_matches(metadata: dict[str, Any], source: str) -> bool:
 def _source_matches_indexed(indexed_source: IndexedSource, source: str) -> bool:
     source_path = str(indexed_source.source_path)
     return source == source_path or source == indexed_source.file_name or source_path.endswith(source)
+
+
+def _profile_filter(profile: str | None) -> dict[str, str] | None:
+    if not profile or profile == DEFAULT_PROFILE:
+        return None
+    return {"extra_profile": profile}
+
+
+def _query_result_count(top_k: int, collection_count: int, profile: str | None) -> int:
+    if not profile or profile == DEFAULT_PROFILE:
+        return collection_count
+    return top_k
+
+
+def _metadata_matches_profile(metadata: dict[str, Any], profile: str | None) -> bool:
+    requested_profile = profile or DEFAULT_PROFILE
+    chunk_profile = str(metadata.get("extra_profile", DEFAULT_PROFILE))
+    return chunk_profile == requested_profile
+
+
+def _combine_filters(source_filter: dict[str, str], profile_filter: dict[str, str] | None) -> dict[str, Any]:
+    if profile_filter is None:
+        return source_filter
+    return {"$and": [source_filter, profile_filter]}

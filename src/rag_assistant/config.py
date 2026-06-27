@@ -7,6 +7,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
 RAW_DATA_DIR = DATA_DIR / "raw"
 PROCESSED_DATA_DIR = DATA_DIR / "processed"
+PROFILE_STORE_PATH = PROCESSED_DATA_DIR / "profiles.json"
 
 
 def _default_vector_store_dir() -> Path:
@@ -17,6 +18,7 @@ VECTOR_STORE_DIR = Path(os.getenv("RAG_VECTOR_STORE_DIR", _default_vector_store_
 
 DEFAULT_CHUNK_SIZE = 900
 DEFAULT_CHUNK_OVERLAP = 150
+DEFAULT_PROFILE = "general"
 
 #DEFAULT_LLM_MODEL = "qwen3-coder:30b"
 #FAST_LLM_MODEL = "qwen2.5-coder:7b"

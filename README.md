@@ -139,6 +139,7 @@ Funktionen:
 
 - Frage an alle indexierten Quellen stellen
 - Frage auf eine einzelne Quelle begrenzen
+- Profil auswählen, zum Beispiel `general`, `technical` oder `recipes`
 - Anzahl der abgerufenen Chunks über `Top K` steuern
 - Nur Retrieval ausführen, ohne eine LLM-Antwort zu erzeugen
 - Antwort mit lokalem LLM erzeugen
@@ -148,7 +149,7 @@ Funktionen:
 Typischer Workflow:
 
 1. Frage eingeben.
-2. Optional eine Quelle auswählen.
+2. Optional ein Profil und eine Quelle auswählen.
 3. `Top K` passend wählen, zum Beispiel `4` oder `5`.
 4. Erst `Retrieve` nutzen, um die gefundenen Chunks zu prüfen.
 5. Danach `Ask` nutzen, um aus den Chunks eine Antwort erzeugen zu lassen.
@@ -217,6 +218,7 @@ Funktionen:
 - Gecachte Zusammenfassung entfernen
 - Einzelne indexierte Quelle aus dem Vector Store löschen
 - Gesamten Vector Store zurücksetzen
+- Profile anzeigen, anlegen und Profilpfade pflegen
 - Aktuelle Speicherorte für Vector Store und Library Store anzeigen
 
 Typischer Workflow:
@@ -235,6 +237,24 @@ Die Aktionen in `Configured Paths` hängen vom Status ab:
 - `Indexed folder`: alle unterstützten Dateien im Ordner sind indexiert; `Re-ingest Folder` baut den Ordner erneut auf
 - `Partially indexed folder`: nur ein Teil der unterstützten Dateien ist indexiert; `Ingest Missing` zieht fehlende Dateien nach
 - `Remove Path`: entfernt nur den Pfad aus der UI-Konfiguration, nicht automatisch den Vector-Store-Eintrag
+
+## Profile
+
+Die erste Profil-Unterstützung ist in der CLI verfügbar. Standard ist `general`.
+In der Web UI kann das Profil im `Ask`-Bereich ausgewählt werden.
+In `Configuration` können Profile angelegt und Pfade zu Profilen hinzugefügt, entfernt oder direkt für das jeweilige Profil indexiert werden.
+Profilpfade zeigen dort ihren Indexstatus pro Profil, zum Beispiel `Not indexed`, `Partially indexed folder` oder `Indexed folder`.
+
+```powershell
+.\.venv\Scripts\rag-assistant.exe profiles
+.\.venv\Scripts\rag-assistant.exe ingest data/raw/local-docus/tech --profile technical
+.\.venv\Scripts\rag-assistant.exe retrieve "Wie nutze ich die API?" --profile technical
+.\.venv\Scripts\rag-assistant.exe ask "Welche Suppen gibt es?" --profile recipes
+```
+
+Profile werden in `data/processed/profiles.json` gespeichert. Eine Quelle kann in mehreren Profilen indexiert werden; dadurch können sich Profil-Quellen überschneiden.
+Wenn `ingest --profile <name>` ein Profil noch nicht kennt, wird es mit Defaultwerten automatisch angelegt. Bekannte Namen wie `technical`, `recipes`, `research` und `legal` erhalten automatisch passende Prompt-Stile für `ask`.
+Alte Chunks ohne Profil-Metadatum werden beim Retrieval als `general` behandelt. Dadurch bleiben bestehende Indizes nutzbar, während Spezialprofile wie `technical` oder `recipes` getrennt abgefragt werden.
 
 ## Lokale Speicherung
 
