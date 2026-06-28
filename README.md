@@ -79,6 +79,14 @@ OCR-Abhängigkeiten installieren:
 winget install UB-Mannheim.TesseractOCR
 ```
 
+Optionale PDF-Tabellenextraktion installieren:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e .[pdf-tables]
+```
+
+Wenn `pdfplumber` installiert ist, werden erkannte PDF-Tabellen pro Seite als Markdown-Tabellen an den extrahierten Seitentext angehängt.
+
 Nach der Tesseract-Installation ein neues Terminal öffnen und prüfen:
 
 ```powershell
@@ -165,6 +173,7 @@ Funktionen:
 - Eine indexierte Quelle auswählen
 - Bereits gecachte Zusammenfassung anzeigen
 - Zusammenfassung neu erzeugen oder aktualisieren
+- Ausgabesprache der Zusammenfassung wählen, zum Beispiel `auto`, `eng`, `deu` oder `fra`
 - Zusammenfassung als Markdown exportieren
 - Zusammenfassung als Textdatei exportieren
 - Anzahl der Teilsummaries nachvollziehen
@@ -178,7 +187,7 @@ Typischer Workflow:
 4. Ergebnis über `Export .md` oder `Export .txt` speichern.
 
 Die Zusammenfassung nutzt einen eigenen Ablauf über alle Chunks der Quelle. Sie ist nicht nur eine normale Top-k-Frage.
-Bei längeren Dokumenten zeigt die Web UI Fortschrittsmeldungen pro Chunk-Gruppe und finalem Merge an.
+Bei längeren Dokumenten startet die Web UI einen Hintergrundjob und zeigt den Fortschritt live pro Chunk-Gruppe und finalem Merge an.
 
 ## Menüpunkt: Extract Text
 
@@ -284,6 +293,8 @@ Die Tests prüfen unter anderem Dokumentladen, Chunking, Retrieval, Prompt-Erste
 
 - Die Qualität hängt stark vom lokalen Modell ab.
 - PDF-Extraktion kann bei komplexem Layout, Tabellen und Scans unvollständig sein.
+- PDF-Tabellenextraktion benötigt das optionale `pdf-tables` Extra und erkennt Tabellen je nach PDF-Layout unterschiedlich gut.
+- Illustrationen, Diagramme und mathematische Formeln werden nicht semantisch verstanden; meist wird nur vorhandener Text oder OCR-Text indexiert.
 - OCR ist langsamer und benötigt eine lokale Tesseract-Installation.
 - AZW3-Extraktion benötigt Calibre `ebook-convert` auf dem `PATH`.
 - Semantisches Retrieval ist nicht perfekt; relevante Chunks sollten in `Ask` zuerst mit `Retrieve` geprüft werden.

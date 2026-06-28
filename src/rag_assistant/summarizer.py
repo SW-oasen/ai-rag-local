@@ -20,6 +20,7 @@ class DocumentSummarizer:
         self,
         chunks: list[TextChunk],
         question: str | None = None,
+        language: str = "auto",
         progress_callback: Callable[[str], None] | None = None,
     ) -> SummaryResult:
         """Create a map-reduce summary over all provided chunks."""
@@ -44,7 +45,7 @@ class DocumentSummarizer:
             )
 
         partial_summaries = [
-            self._summarize_group(group, index, len(groups), total_steps, question, progress_callback)
+            self._summarize_group(group, index, len(groups), total_steps, question, language, progress_callback)
             for index, group in enumerate(groups, start=1)
         ]
         if progress_callback:
@@ -54,7 +55,7 @@ class DocumentSummarizer:
             )
         merge_started_at = time.monotonic()
         final_summary = self.llm_client.generate(
-            build_final_summary_prompt(partial_summaries, ordered_chunks, question=question)
+            build_final_summary_prompt(partial_summaries, ordered_chunks, question=question, language=language)
         )
         if progress_callback:
             progress_callback(
@@ -78,6 +79,7 @@ class DocumentSummarizer:
         group_count: int,
         total_steps: int,
         question: str | None,
+        language: str,
         progress_callback: Callable[[str], None] | None,
     ) -> str:
         if progress_callback:
@@ -87,7 +89,7 @@ class DocumentSummarizer:
                 f"group {group_index}/{group_count} started ({_format_group_scope(group)})."
             )
         group_started_at = time.monotonic()
-        summary = self.llm_client.generate(build_chunk_summary_prompt(group, question=question))
+        summary = self.llm_client.generate(build_chunk_summary_prompt(group, question=question, language=language))
         if progress_callback:
             progress_callback(
                 f"Progress {_progress_percent(group_index, total_steps)}%: "
@@ -97,10 +99,11 @@ class DocumentSummarizer:
         return summary
 
 
-def build_chunk_summary_prompt(chunks: list[TextChunk], question: str | None = None) -> str:
+def build_chunk_summary_prompt(chunks: list[TextChunk], question: str | None = None, language: str = "auto") -> str:
     """Build a prompt for summarizing a group of source chunks."""
 
     focus = f"\nUser focus: {question}\n" if question else ""
+    language_rule = _summary_language_rule(language)
     return f"""Summarize the following document chunks.
 
 Rules:
@@ -108,6 +111,7 @@ Rules:
 - Do not add information that is not present in the chunks.
 - Mention uncertainty when the chunks are incomplete.
 - Keep source labels in the summary when useful.
+- {language_rule}
 {focus}
 Chunks:
 {_format_chunks(chunks)}
@@ -120,10 +124,12 @@ def build_final_summary_prompt(
     partial_summaries: list[str],
     source_chunks: list[TextChunk],
     question: str | None = None,
+    language: str = "auto",
 ) -> str:
     """Build a prompt for merging partial summaries into a final summary."""
 
     focus = f"\nUser focus: {question}\n" if question else ""
+    language_rule = _summary_language_rule(language)
     partial_text = "\n\n".join(
         f"[partial summary {index}]\n{summary}" for index, summary in enumerate(partial_summaries, start=1)
     )
@@ -135,6 +141,7 @@ Rules:
 - Keep the final answer coherent and non-repetitive.
 - Include key limitations or missing context if visible.
 - Cite source chunk labels where appropriate.
+- {language_rule}
 {focus}
 Available source chunks:
 {source_text}
@@ -148,6 +155,19 @@ Final summary:
 
 def _group_chunks(chunks: list[TextChunk], group_size: int) -> list[list[TextChunk]]:
     return [chunks[index : index + group_size] for index in range(0, len(chunks), group_size)]
+
+
+def _summary_language_rule(language: str) -> str:
+    language_names = {
+        "auto": "Write the summary in the same language as the source text.",
+        "eng": "Write the summary in English.",
+        "deu": "Write the summary in German.",
+        "eng+deu": "Write the summary in the language that best matches the source; use English or German when appropriate.",
+        "fra": "Write the summary in French.",
+        "chi_sim": "Write the summary in Simplified Chinese.",
+        "chi_tra": "Write the summary in Traditional Chinese.",
+    }
+    return language_names.get(language, language_names["auto"])
 
 
 def _progress_percent(completed_steps: int, total_steps: int) -> int:

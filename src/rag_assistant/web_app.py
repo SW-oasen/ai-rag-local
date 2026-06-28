@@ -1,11 +1,15 @@
 """Dependency-free local web UI for the RAG assistant."""
 
 from argparse import ArgumentParser, Namespace
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
 from pathlib import Path
+import threading
+import time
 from urllib.parse import parse_qs, urlencode, urlparse
+from uuid import uuid4
 
 from rag_assistant.config import (
     DEFAULT_CHUNK_OVERLAP,
@@ -39,6 +43,22 @@ OCR_LANGUAGE_OPTIONS = [
     ("chi_sim", "Chinese Simplified (chi_sim)"),
     ("chi_tra", "Chinese Traditional (chi_tra)"),
 ]
+SUMMARY_LANGUAGE_OPTIONS = [
+    ("auto", "Same as source (auto)"),
+    *OCR_LANGUAGE_OPTIONS,
+]
+
+
+@dataclass
+class SummaryJob:
+    id: str
+    source: str
+    language: str = "auto"
+    status: str = "running"
+    messages: list[str] = field(default_factory=list)
+    error: str = ""
+    started_at: float = field(default_factory=time.monotonic)
+    finished_at: float | None = None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -76,17 +96,24 @@ def build_parser() -> ArgumentParser:
     parser.add_argument("--ocr-language", default="eng")
     parser.add_argument("--ocr-scale", type=float, default=3.0)
     parser.add_argument("--ocr-psm", type=int, default=6)
+    parser.add_argument("--summary-language", default="auto")
     return parser
 
 
 def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
     """Create a request handler bound to CLI configuration."""
 
+    summary_jobs: dict[str, SummaryJob] = {}
+    summary_jobs_lock = threading.Lock()
+
     class RagUiHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
             route = _normalize_route(parsed.path)
             query = parse_qs(parsed.query)
+            if route == "/summary-progress":
+                self._send_summary_progress(query)
+                return
             sources = self._load_sources_safe()
             profiles = self._profile_store().list_profiles()
 
@@ -96,11 +123,13 @@ def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
                     return
                 if route == "/summarize":
                     selected_source = _first(query, "source").strip() or None
+                    summary_language = _first(query, "summary_language").strip() or args.summary_language
                     self._send_html(
                         render_page(
                             active_page="summarize",
                             sources=sources,
                             selected_source=selected_source,
+                            summary_language=summary_language,
                             cached_summary=self._library_store().get_summary(selected_source) if selected_source else None,
                         )
                     )
@@ -159,6 +188,7 @@ def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
             ocr_psm = _parse_positive_int(_first(form, "ocr_psm"), args.ocr_psm)
             ocr_preprocess = _first(form, "ocr_preprocess") == "on"
             ocr_clean_text = _first(form, "ocr_clean_text") == "on"
+            summary_language = _first(form, "summary_language").strip() or args.summary_language
             top_k = _parse_positive_int(_first(form, "top_k"), DEFAULT_TOP_K)
             route = _normalize_route(urlparse(self.path).path)
 
@@ -196,19 +226,14 @@ def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
                     )
                     return
                 if route == "/summarize":
-                    progress: list[str] = []
-                    summary = self._summarize(source, progress=progress)
-                    cached_summary = self._cache_summary(summary)
+                    job = self._start_summary_job(source, language=summary_language)
                     self._send_html(
                         render_page(
                             active_page="summarize",
                             sources=self._load_sources(),
-                            question=question,
                             selected_source=source,
-                            top_k=top_k,
-                            summary=summary,
-                            cached_summary=cached_summary,
-                            progress_messages=progress,
+                            summary_language=summary_language,
+                            summary_job_id=job.id,
                         )
                     )
                     return
@@ -282,13 +307,11 @@ def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
                     self._send_configuration(progress=progress)
                     return
                 if route == "/configuration/summarize-source":
-                    progress: list[str] = []
-                    summary = self._summarize(source, progress=progress)
-                    self._cache_summary(summary)
+                    job = self._start_summary_job(source, language=summary_language)
                     self._send_configuration(
                         selected_source=source,
-                        message="Summary cached.",
-                        progress=progress,
+                        message="Summary job started. Progress is shown below.",
+                        summary_job_id=job.id,
                     )
                     return
                 if route == "/configuration/remove-summary":
@@ -315,6 +338,14 @@ def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
             body = html.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _send_json(self, payload: dict) -> None:
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -386,7 +417,12 @@ def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
                 prompt_style=profile.prompt_style,
             )
 
-        def _summarize(self, source: str | None, progress: list[str] | None = None) -> SummaryResult:
+        def _summarize(
+            self,
+            source: str | None,
+            progress: list[str] | None = None,
+            language: str = "auto",
+        ) -> SummaryResult:
             if not source:
                 raise ValueError("Select one indexed source before summarizing.")
             llm_client = OllamaLlmClient(
@@ -395,7 +431,80 @@ def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
                 temperature=args.temperature,
             )
             chunks = self._vector_store().get_chunks_by_source(source)
-            return DocumentSummarizer(llm_client=llm_client).summarize(chunks, progress_callback=progress.append if progress is not None else None)
+            return DocumentSummarizer(llm_client=llm_client).summarize(
+                chunks,
+                language=language,
+                progress_callback=progress.append if progress is not None else None,
+            )
+
+        def _start_summary_job(self, source: str | None, language: str = "auto") -> SummaryJob:
+            if not source:
+                raise ValueError("Select one indexed source before summarizing.")
+            job = SummaryJob(id=uuid4().hex, source=source, language=language)
+            with summary_jobs_lock:
+                summary_jobs[job.id] = job
+            thread = threading.Thread(target=self._run_summary_job, args=(job.id,), daemon=True)
+            thread.start()
+            return job
+
+        def _run_summary_job(self, job_id: str) -> None:
+            with summary_jobs_lock:
+                job = summary_jobs[job_id]
+                source = job.source
+                language = job.language
+
+            def append_progress(message: str) -> None:
+                with summary_jobs_lock:
+                    summary_jobs[job_id].messages.append(message)
+
+            try:
+                append_progress(f"Summary job started for {source} ({_summary_language_label(language)}).")
+                chunks = self._vector_store().get_chunks_by_source(source)
+                llm_client = OllamaLlmClient(
+                    model=args.llm_model,
+                    host=args.ollama_host,
+                    temperature=args.temperature,
+                )
+                summary = DocumentSummarizer(llm_client=llm_client).summarize(
+                    chunks,
+                    language=language,
+                    progress_callback=append_progress,
+                )
+                self._cache_summary(summary)
+                with summary_jobs_lock:
+                    job = summary_jobs[job_id]
+                    job.status = "complete"
+                    job.finished_at = time.monotonic()
+                    job.messages.append("Summary cached.")
+            except Exception as exc:
+                with summary_jobs_lock:
+                    job = summary_jobs[job_id]
+                    job.status = "failed"
+                    job.error = str(exc)
+                    job.finished_at = time.monotonic()
+                    job.messages.append(f"Error: {exc}")
+
+        def _send_summary_progress(self, query: dict[str, list[str]]) -> None:
+            job_id = _first(query, "job_id").strip()
+            with summary_jobs_lock:
+                job = summary_jobs.get(job_id)
+                if job is None:
+                    self._send_json({"status": "missing", "messages": [], "error": "Summary job not found."})
+                    return
+                elapsed = (job.finished_at or time.monotonic()) - job.started_at
+                payload = {
+                    "id": job.id,
+                    "source": job.source,
+                    "source_name": Path(job.source).name,
+                    "language": job.language,
+                    "language_label": _summary_language_label(job.language),
+                    "status": job.status,
+                    "messages": list(job.messages),
+                    "error": job.error,
+                    "elapsed_seconds": round(elapsed),
+                    "result_url": f"/summarize?{urlencode({'source': job.source})}" if job.status == "complete" else "",
+                }
+            self._send_json(payload)
 
         def _extract_text(self, path: str, ocr_options: OcrOptions) -> list[Document]:
             if not path:
@@ -457,6 +566,7 @@ def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
             selected_source: str | None = None,
             message: str | None = None,
             progress: list[str] | None = None,
+            summary_job_id: str | None = None,
         ) -> None:
             profiles = self._profile_store().list_profiles()
             self._send_html(
@@ -471,6 +581,7 @@ def create_handler(args: Namespace) -> type[BaseHTTPRequestHandler]:
                     library_store_path=args.library_store,
                     message=message,
                     progress_messages=progress or [],
+                    summary_job_id=summary_job_id,
                 )
             )
 
@@ -512,6 +623,7 @@ def render_page(
     answer: RagAnswer | None = None,
     summary: SummaryResult | None = None,
     cached_summary: CachedSummary | None = None,
+    summary_language: str = "auto",
     extract_path: str = "",
     ocr_options: OcrOptions | None = None,
     extracted_documents: list[Document] | None = None,
@@ -520,6 +632,7 @@ def render_page(
     library_store_path: Path | None = None,
     message: str | None = None,
     progress_messages: list[str] | None = None,
+    summary_job_id: str | None = None,
     error: str | None = None,
 ) -> str:
     """Render the local UI shell and selected page."""
@@ -542,6 +655,7 @@ def render_page(
         answer=answer,
         summary=summary,
         cached_summary=cached_summary,
+        summary_language=summary_language,
         extract_path=extract_path,
         ocr_options=ocr_options,
         extracted_documents=extracted_documents,
@@ -569,6 +683,7 @@ def render_page(
     {render_message(message)}
     {render_error(error)}
     {render_progress(progress_messages)}
+    {render_summary_job_progress(summary_job_id)}
     {page_content}
   </main>
 </body>
@@ -588,6 +703,7 @@ def render_page_content(
     answer: RagAnswer | None,
     summary: SummaryResult | None,
     cached_summary: CachedSummary | None,
+    summary_language: str,
     extract_path: str,
     ocr_options: OcrOptions | None,
     extracted_documents: list[Document] | None,
@@ -602,7 +718,7 @@ def render_page_content(
             + render_retrieval_results(retrieval_results)
         )
     if active_page == "summarize":
-        return render_summary_page(sources, selected_source, cached_summary, summary)
+        return render_summary_page(sources, selected_source, cached_summary, summary, summary_language)
     if active_page == "extract-text":
         return render_extract_form(extract_path, ocr_options) + render_extracted_documents(extracted_documents)
     if active_page == "configuration":
@@ -671,6 +787,7 @@ def render_summary_page(
     selected_source: str | None,
     cached_summary: CachedSummary | None,
     generated_summary: SummaryResult | None,
+    summary_language: str = "auto",
 ) -> str:
     current_summary = cached_summary
     if generated_summary is not None and generated_summary.source_chunks:
@@ -700,6 +817,7 @@ def render_summary_page(
     <section class="query">
       <form method="post" action="/summarize">
         {render_source_selector(sources, selected, label="Document", required=True)}
+        {render_summary_language_selector(summary_language)}
         <div class="actions">
           <button class="secondary" formaction="/summarize" formmethod="get" type="submit">View Cached Summary</button>
           <button type="submit">Generate / Update Summary</button>
@@ -708,6 +826,25 @@ def render_summary_page(
     </section>
     {render_cached_summary(current_summary)}
     {export_links}"""
+
+
+def render_summary_language_selector(selected_language: str = "auto") -> str:
+    options = "".join(
+        f'<option value="{escape(value)}"{" selected" if value == selected_language else ""}>{escape(label)}</option>'
+        for value, label in SUMMARY_LANGUAGE_OPTIONS
+    )
+    return f"""
+        <div class="controls">
+          <label>
+            Summary Language
+            <select name="summary_language">{options}</select>
+          </label>
+        </div>"""
+
+
+def _summary_language_label(language: str) -> str:
+    labels = dict(SUMMARY_LANGUAGE_OPTIONS)
+    return labels.get(language, labels["auto"])
 
 
 def render_configuration_page(
@@ -782,6 +919,7 @@ def render_configuration_page(
     <section class="query">
       <form method="post" action="/configuration/summarize-source">
         {render_source_selector(sources, selected_source, label="Summary Cache", required=True)}
+        {render_summary_language_selector()}
         <div class="actions">
           <button type="submit">Create / Update Cached Summary</button>
           <button class="secondary" formaction="/configuration/remove-summary" type="submit">Remove Cached Summary</button>
@@ -1269,6 +1407,66 @@ def render_progress(messages: list[str]) -> str:
     return f"<section class=\"progress\"><h2>Progress</h2><ol>{items}</ol></section>"
 
 
+def render_summary_job_progress(job_id: str | None) -> str:
+    if not job_id:
+        return ""
+    safe_job_id = escape(job_id)
+    return f"""
+    <section class="progress live-progress" data-summary-job="{safe_job_id}">
+      <h2>Summary Progress</h2>
+      <p class="meta" id="summary-job-status">Starting summary...</p>
+      <dl class="details compact-progress">
+        <dt>Started</dt><dd id="summary-job-start">Queued.</dd>
+        <dt>Current</dt><dd id="summary-job-current">Waiting for first update.</dd>
+      </dl>
+    </section>
+    <script>
+    (() => {{
+      const panel = document.querySelector("[data-summary-job]");
+      if (!panel) return;
+      const jobId = panel.dataset.summaryJob;
+      const status = document.getElementById("summary-job-status");
+      const started = document.getElementById("summary-job-start");
+      const current = document.getElementById("summary-job-current");
+      let redirected = false;
+
+      function relevantMessages(data) {{
+        const all = data.messages || [];
+        const firstMessage = all.find((message) => message.startsWith("Summarizing ")) || all[0] || "Queued.";
+        const firstProgress = data.source_name ? `${{data.source_name}} | ${{firstMessage}}` : firstMessage;
+        const latest = data.error || all[all.length - 1] || "Waiting for first update.";
+        return [firstProgress, latest];
+      }}
+
+      async function poll() {{
+        try {{
+          const response = await fetch(`/summary-progress?job_id=${{encodeURIComponent(jobId)}}`, {{cache: "no-store"}});
+          const data = await response.json();
+          const elapsed = data.elapsed_seconds || 0;
+          status.textContent = `${{data.status}} | ${{elapsed}}s elapsed`;
+          const [firstProgress, latest] = relevantMessages(data);
+          started.textContent = firstProgress;
+          current.textContent = latest;
+          if (data.status === "complete" && data.result_url && !redirected) {{
+            redirected = true;
+            status.textContent = `complete | ${{elapsed}}s elapsed | loading cached summary...`;
+            window.setTimeout(() => {{ window.location.href = data.result_url; }}, 1000);
+            return;
+          }}
+          if (data.status !== "failed" && data.status !== "missing") {{
+            window.setTimeout(poll, 2000);
+          }}
+        }} catch (error) {{
+          status.textContent = `progress unavailable: ${{error}}`;
+          window.setTimeout(poll, 4000);
+        }}
+      }}
+
+      poll();
+    }})();
+    </script>"""
+
+
 def render_error(error: str | None) -> str:
     if not error:
         return ""
@@ -1623,6 +1821,7 @@ article { background: #ffffff; border: 1px solid #d5dbe3; padding: 14px; margin-
 .message p { margin: 0; }
 .progress { border-left: 4px solid #3b5b92; background: #eef4ff; padding: 14px; }
 .progress ol { margin: 0; padding-left: 22px; }
+.compact-progress { background: transparent; border: 0; padding: 0; }
 @media (max-width: 760px) {
   main { padding: 18px; }
   header, .controls, .ocr-controls, .overview-grid, .details { display: grid; grid-template-columns: 1fr; }

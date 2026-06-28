@@ -137,13 +137,22 @@ def _iter_supported_files(directory: Path) -> list[Path]:
 
 
 def _load_text_document(path: Path) -> Document:
-    text = path.read_text(encoding="utf-8")
+    text = _read_plain_text(path)
     return Document(
         text=text,
         source_path=path,
         file_name=path.name,
         document_type=path.suffix.lower().lstrip("."),
     )
+
+
+def _read_plain_text(path: Path) -> str:
+    for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            return path.read_text(encoding=encoding)
+        except UnicodeDecodeError:
+            continue
+    return path.read_text(encoding="utf-8", errors="replace")
 
 
 def _load_epub_document(path: Path) -> Document:
@@ -344,9 +353,11 @@ def _load_pdf_document(path: Path, ocr_options: OcrOptions | None = None) -> lis
     reader = PdfReader(str(path))
     documents: list[Document] = []
     options = ocr_options or OcrOptions()
+    tables_by_page, table_error = _extract_pdf_tables_by_page(path)
 
     for page_index, page in enumerate(reader.pages, start=1):
         text = page.extract_text() or ""
+        page_tables = tables_by_page.get(page_index, [])
         metadata = {
             "ocr_used": False,
             "ocr_language": options.language,
@@ -354,12 +365,17 @@ def _load_pdf_document(path: Path, ocr_options: OcrOptions | None = None) -> lis
             "ocr_psm": options.psm,
             "ocr_preprocess": options.preprocess,
             "ocr_clean_text": options.clean_text,
+            "pdf_tables_extracted": len(page_tables),
+            "pdf_tables_error": table_error,
         }
         if options.enabled and not text.strip():
             text = _ocr_pdf_page(path, page_index - 1, options=options)
             metadata["ocr_used"] = True
         if metadata["ocr_used"] and options.clean_text:
             text = clean_ocr_text(text)
+        if page_tables:
+            table_text = _format_pdf_page_tables(page_tables)
+            text = "\n\n".join(part for part in (text.strip(), table_text) if part)
         documents.append(
             Document(
                 text=text,
@@ -372,6 +388,69 @@ def _load_pdf_document(path: Path, ocr_options: OcrOptions | None = None) -> lis
         )
 
     return documents
+
+
+def _extract_pdf_tables_by_page(path: Path) -> tuple[dict[int, list[str]], str]:
+    try:
+        import pdfplumber
+    except ImportError:
+        return {}, "pdfplumber is not installed"
+
+    tables_by_page: dict[int, list[str]] = {}
+    try:
+        with pdfplumber.open(path) as pdf:
+            for page_index, page in enumerate(pdf.pages, start=1):
+                page_tables = []
+                for table in page.extract_tables():
+                    markdown = _pdf_table_to_markdown(table)
+                    if markdown:
+                        page_tables.append(markdown)
+                if page_tables:
+                    tables_by_page[page_index] = page_tables
+    except Exception as exc:
+        return {}, f"pdfplumber table extraction failed: {exc}"
+    return tables_by_page, ""
+
+
+def _format_pdf_page_tables(tables: list[str]) -> str:
+    sections = []
+    for table_index, table in enumerate(tables, start=1):
+        sections.append(f"Table {table_index}\n\n{table}")
+    return "\n\n".join(sections)
+
+
+def _pdf_table_to_markdown(table: list[list[object]]) -> str:
+    rows = [_normalize_pdf_table_row(row) for row in table]
+    rows = [row for row in rows if any(cell for cell in row)]
+    if not rows:
+        return ""
+
+    width = max(len(row) for row in rows)
+    rows = [row + [""] * (width - len(row)) for row in rows]
+
+    header = rows[0]
+    body = rows[1:]
+    if not any(header):
+        header = [f"Column {index}" for index in range(1, width + 1)]
+        body = rows
+
+    lines = [
+        "| " + " | ".join(header) + " |",
+        "| " + " | ".join("---" for _ in header) + " |",
+    ]
+    lines.extend("| " + " | ".join(row) + " |" for row in body)
+    return "\n".join(lines)
+
+
+def _normalize_pdf_table_row(row: list[object]) -> list[str]:
+    return [_normalize_pdf_table_cell(cell) for cell in row]
+
+
+def _normalize_pdf_table_cell(cell: object) -> str:
+    if cell is None:
+        return ""
+    text = _normalize_extracted_text(str(cell))
+    return text.replace("|", r"\|")
 
 
 def _ocr_pdf_page(path: Path, page_index: int, options: OcrOptions | None = None) -> str:
@@ -418,9 +497,205 @@ def clean_ocr_text(text: str) -> str:
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
     normalized = re.sub(r"(?<=\w)-\n(?=\w)", "", normalized)
     normalized = re.sub(r"(?<![.!?:;])\n(?=\S)", " ", normalized)
+    normalized = _fix_common_ocr_substitutions(normalized)
     normalized = re.sub(r"[ \t]+", " ", normalized)
     normalized = re.sub(r"\n{3,}", "\n\n", normalized)
     return normalized.strip()
+
+
+def _fix_common_ocr_substitutions(text: str) -> str:
+    """Fix conservative OCR substitutions in English prose."""
+
+    fixed = _fix_isolated_pipe_pronouns(text)
+
+    pronoun_followers = (
+        "am",
+        "can",
+        "can't",
+        "can\u2019t",
+        "cannot",
+        "could",
+        "couldn't",
+        "couldn\u2019t",
+        "did",
+        "didn't",
+        "didn\u2019t",
+        "do",
+        "don't",
+        "don\u2019t",
+        "feel",
+        "felt",
+        "got",
+        "had",
+        "hadn't",
+        "hadn\u2019t",
+        "have",
+        "haven't",
+        "haven\u2019t",
+        "keep",
+        "kept",
+        "know",
+        "knew",
+        "like",
+        "liked",
+        "love",
+        "loved",
+        "need",
+        "needed",
+        "prefer",
+        "remember",
+        "should",
+        "shouldn't",
+        "shouldn\u2019t",
+        "think",
+        "thought",
+        "tried",
+        "try",
+        "want",
+        "wanted",
+        "was",
+        "wasn't",
+        "wasn\u2019t",
+        "will",
+        "won't",
+        "won\u2019t",
+        "would",
+        "wouldn't",
+        "wouldn\u2019t",
+    )
+    follower_pattern = "|".join(re.escape(word) for word in pronoun_followers)
+    quote_or_space = r"[\s\"'\u201c\u2018]"
+
+    fixed = re.sub(
+        rf"(^|{quote_or_space})[\|\]T](?=\s+(?:{follower_pattern})\b)",
+        r"\1I",
+        fixed,
+    )
+    fixed = _fix_ocr_ill_contractions(fixed)
+    fixed = re.sub(rf"(^|{quote_or_space})Tl(?=\s+would\b)", r"\1I", fixed)
+    return re.sub(
+        r"\b1([fstn])\b",
+        lambda match: {"f": "if", "s": "is", "t": "it", "n": "in"}[match.group(1).lower()],
+        fixed,
+        flags=re.IGNORECASE,
+    )
+
+
+def _fix_ocr_ill_contractions(text: str) -> str:
+    contraction_followers = (
+        "ask",
+        "be",
+        "bet",
+        "call",
+        "come",
+        "do",
+        "find",
+        "get",
+        "give",
+        "go",
+        "have",
+        "keep",
+        "let",
+        "make",
+        "need",
+        "never",
+        "probably",
+        "put",
+        "see",
+        "show",
+        "still",
+        "take",
+        "tell",
+        "try",
+        "use",
+        "wait",
+        "want",
+        "work",
+    )
+    follower_pattern = "|".join(re.escape(word) for word in contraction_followers)
+    return re.sub(
+        rf"(?<![A-Za-z])(?:\[Il|Ill)(?=\s+(?:{follower_pattern})\b)",
+        "I'll",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+
+def _fix_isolated_pipe_pronouns(text: str) -> str:
+    prose_before_words = {
+        "actually",
+        "after",
+        "although",
+        "and",
+        "as",
+        "because",
+        "before",
+        "but",
+        "can",
+        "could",
+        "did",
+        "do",
+        "does",
+        "even",
+        "guess",
+        "how",
+        "if",
+        "like",
+        "may",
+        "maybe",
+        "might",
+        "must",
+        "no",
+        "once",
+        "or",
+        "should",
+        "since",
+        "so",
+        "than",
+        "that",
+        "then",
+        "though",
+        "unless",
+        "until",
+        "well",
+        "what",
+        "when",
+        "where",
+        "while",
+        "why",
+        "will",
+        "would",
+        "yeah",
+        "yes",
+    }
+    open_quotes = "\"'\u201c\u2018"
+    close_punctuation = ".,!?;:\")]}\u201d\u2019"
+
+    def replace_pipe(match: re.Match[str]) -> str:
+        start = match.start()
+        end = match.end()
+        previous_char = text[start - 1] if start else ""
+        next_char = text[end] if end < len(text) else ""
+
+        if previous_char and not previous_char.isspace() and previous_char not in open_quotes:
+            return "|"
+        if next_char and not next_char.isspace() and next_char not in close_punctuation:
+            return "|"
+
+        before = text[:start].rstrip()
+        before_context = before.rstrip(f" \t{open_quotes}")
+        previous_word = re.search(r"([A-Za-z]+(?:'[A-Za-z]+)?)\W*$", before_context)
+        previous_word_text = previous_word.group(1).lower() if previous_word else ""
+
+        if not before_context:
+            return "I"
+        if before_context[-1] in ".!?,;:([{":
+            return "I"
+        if previous_word_text in prose_before_words:
+            return "I"
+        return "|"
+
+    return re.sub(r"\|", replace_pipe, text)
 
 
 def _resolve_ocr_options(

@@ -157,6 +157,11 @@ def build_parser() -> ArgumentParser:
     summarize.add_argument("--max-chunks-per-group", type=int, default=4)
     summarize.add_argument("--question", default=None, help="Optional focus question for the summary.")
     summarize.add_argument(
+        "--summary-language",
+        default="auto",
+        help="Summary output language code, for example auto, eng, deu, fra, chi_sim, or chi_tra.",
+    )
+    summarize.add_argument(
         "--from-index",
         action="store_true",
         help="Read chunks from the vector store instead of loading the source file directly.",
@@ -296,7 +301,12 @@ def _handle_summarize(args: Namespace) -> int:
     summary = DocumentSummarizer(
         llm_client=llm_client,
         max_chunks_per_group=args.max_chunks_per_group,
-    ).summarize(chunks, question=args.question, progress_callback=_print_progress)
+    ).summarize(
+        chunks,
+        question=args.question,
+        language=args.summary_language,
+        progress_callback=_print_progress,
+    )
     print(format_summary_result(summary))
     return 0
 
